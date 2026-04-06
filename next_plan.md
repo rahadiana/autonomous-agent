@@ -1,371 +1,426 @@
-Saya sudah baca struktur yang kamu kirim (bukan sekadar lihat sekilas). Secara garis besar: **arsitektur kamu sudah “benar arah”, tapi belum “tertutup secara sistem”**. Banyak komponen sudah ada, tapi belum terhubung jadi loop belajar yang stabil.
+Saya sudah “scan” isi arsitektur yang kamu bangun (dari file yang kamu kasih). Secara struktur, ini **sudah bukan level mainan** — tapi ada masalah fundamental:
 
-Di bawah ini saya breakdown secara brutal: mana yang sudah bagus, mana yang bolong, dan apa yang harus kamu perbaiki **dengan kode konkret** supaya sistem benar-benar jadi *autonomous evolving agent*, bukan sekadar framework.
+> sistem kamu **terlihat lengkap di dokumen**, tapi belum sepenuhnya *ter-grounding ke runtime nyata*.
 
----
-
-# 🔍 1. DIAGNOSIS UTAMA (MASALAH STRUKTURAL)
-
-## ❌ 1. Kamu masih “modular”, belum “closed learning loop”
-
-Dari file:
-
-* skill memory ✔️ 
-* mutation + bandit ✔️ 
-* planner + critic ✔️ 
-* blackboard ✔️ 
-
-**Masalahnya:**
-➡️ Semua ada, tapi belum benar-benar *looping secara sistematis*
-
-### Gap:
-
-* tidak ada **central orchestrated learning loop**
-* tidak ada **global reward signal**
-* tidak ada **consistency constraint antar layer**
+Saya akan langsung kritik secara keras dan teknis. Fokus: gap yang bikin sistem gagal mencapai tujuan “autonomous evolving agent”.
 
 ---
 
-## ❌ 2. Evaluator kamu masih “dummy-level”
-
-Contoh:
-
-```ts
-if (result !== undefined) score += 0.4;
-```
-
-Ini problem besar:
-
-* skill jelek tetap bisa lolos
-* mutation jadi noise
-* bandit jadi bias
-
----
-
-## ❌ 3. Skill explosion belum dikontrol dengan benar
+# 🔴 1. MASALAH PALING FATAL: “FAKE INTELLIGENCE LOOP”
 
 Kamu sudah punya:
 
-* pruning ✔️ 
-* mutation limit ✔️ 
+* planner + critic loop 
+* hierarchical planning 
+* multi-agent orchestration 
 
-Tapi belum ada:
+Tapi masalahnya:
 
-* **diversity control**
-* **duplicate detection**
-* **capability normalization global**
-
-➡️ Ini akan bikin DB kamu jadi sampah dalam waktu singkat
-
----
-
-## ❌ 4. Blackboard sudah ada, tapi belum jadi “control system”
-
-Masalah:
-
-* masih event-driven sederhana
-* belum ada **state invariant**
-* belum ada **failure recovery global**
-
----
-
-## ❌ 5. Planner kamu masih “LLM-driven”, belum “search-driven”
-
-Kamu sudah punya:
-
-* tree search ✔️
-* hierarchical ✔️ 
-
-Tapi:
-➡️ belum ada **cost model**
-➡️ belum ada **execution feedback loop ke planner**
-
----
-
-# ⚠️ 2. MASALAH PALING KRITIS (INI YANG BIKIN SISTEM GAGAL)
-
-## ❌ Tidak ada GLOBAL LEARNING CONTROLLER
-
-Semua sistem AI agent modern punya ini.
-
-Kamu belum.
-
----
-
-# ✅ 3. FIX WAJIB (DENGAN KODE LANGSUNG)
-
-## 🔧 3.1 Tambahkan LEARNING ORCHESTRATOR
-
-Ini yang mengikat semua komponen kamu.
+### ❌ evaluasi tidak benar-benar grounded
 
 ```ts
-async function learningLoop(input) {
-  const context = {
-    input,
-    timestamp: Date.now()
-  };
-
-  // 1. retrieve skill
-  const candidates = await retrieveSkills(input);
-
-  // 2. select (bandit)
-  const skill = selectSkillWithBandit(candidates);
-
-  // 3. execute
-  const result = await runDSL(skill.json, input);
-
-  // 4. validate
-  const validation = validate(skill.output_schema, result);
-
-  // 5. evaluate (REAL, bukan dummy)
-  const reward = computeReward({
-    result,
-    validation,
-    skill
-  });
-
-  // 6. update skill stats
-  await updateSkillStats(skill, reward > 0.7);
-
-  // 7. exploration
-  if (shouldExplore()) {
-    await exploreSkill(skill, input);
-  }
-
-  // 8. memory update
-  await saveEpisode({
-    input,
-    skill_id: skill.id,
-    reward
-  });
-
-  return result;
-}
-```
-
----
-
-## 🔧 3.2 GANTI evaluator kamu (INI WAJIB)
-
-Jangan pakai heuristic receh.
-
-```ts
-function computeReward({ result, validation, skill }) {
+function evaluate(result, validation) {
   let score = 0;
 
-  // 1. schema validity
-  if (validation.valid) score += 0.3;
-
-  // 2. output richness (proxy usefulness)
-  if (typeof result === "object" && Object.keys(result).length > 0) {
-    score += 0.2;
-  }
-
-  // 3. determinism check
-  if (skill.usage_count > 3) {
-    score += 0.2;
-  }
-
-  // 4. latency penalty
-  if (result._latency && result._latency < 100) {
-    score += 0.1;
-  }
-
-  // 5. historical success rate
-  const successRate =
-    skill.success_count / (skill.usage_count + 1);
-
-  score += successRate * 0.2;
+  if (validation.valid) score += 0.2;
+  if (result !== undefined) score += 0.4;
+  score += 0.2;
+  score += 0.2;
 
   return score;
 }
 ```
 
----
+Ini **pseudo-evaluation**, bukan evaluasi nyata.
 
-## 🔧 3.3 Tambahkan DUPLICATE DETECTION (INI BELUM ADA)
+### Dampak:
 
-Kalau tidak:
-→ skill kamu akan penuh clone
-
-```ts
-function isDuplicateSkill(newSkill, existingSkills) {
-  return existingSkills.some(s => {
-    return JSON.stringify(s.json.logic) ===
-           JSON.stringify(newSkill.logic);
-  });
-}
-```
-
-Integrasi:
-
-```ts
-if (isDuplicateSkill(mutated, skills)) {
-  return; // discard
-}
-```
+* skill jelek tetap lolos
+* agent merasa “benar” padahal salah
+* learning loop jadi ilusi
 
 ---
 
-## 🔧 3.4 Tambahkan CAPABILITY NORMALIZATION GLOBAL
+## ✅ FIX (WAJIB): REAL TASK-BASED EVALUATION
 
-Sekarang kamu raw string.
-
-Ini salah.
+Tambahkan **expected output comparator**
 
 ```ts
-function normalizeCapability(text) {
+function evaluateReal(result, expected) {
+  try {
+    return deepEqual(result, expected) ? 1.0 : 0.0;
+  } catch {
+    return 0.0;
+  }
+}
+```
+
+Gabungkan:
+
+```ts
+const score =
+  (correctness * 0.5) +
+  (schemaValid ? 0.2 : 0) +
+  (efficiency * 0.1) +
+  (stability * 0.2);
+```
+
+👉 Tanpa ini: sistem kamu tidak pernah benar-benar belajar.
+
+---
+
+# 🔴 2. SKILL GENERATION TIDAK TERKONTROL (CHAOS SOURCE)
+
+Dari system prompt kamu :
+
+> ALWAYS create reusable skills
+
+Ini berbahaya.
+
+### Problem:
+
+* capability duplication
+* skill spam
+* registry overload
+
+---
+
+## ✅ FIX: CAPABILITY CANONICALIZATION
+
+Tambahkan normalizer:
+
+```ts
+function canonicalCapability(text) {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "_")
-    .replace(/_+/g, "_")
-    .trim();
+    .replace(/_+/g, "_");
 }
 ```
 
-Dan enforce:
+Dan enforce uniqueness:
 
 ```ts
-skill.capability = normalizeCapability(skill.capability);
-```
+const existing = await Skill.findOne({
+  where: { capability: canonicalCapability(newSkill.capability) }
+});
 
----
-
-## 🔧 3.5 Tambahkan FAILURE MEMORY (INI GAME CHANGER)
-
-Sekarang kamu cuma simpan success.
-
-Harus simpan failure.
-
-```ts
-async function logFailure(input, skill, error) {
-  await FailureLog.create({
-    input,
-    skill_id: skill.id,
-    error: error.message,
-    created_at: new Date()
-  });
-}
-```
-
-Gunakan untuk:
-
-```ts
-if (tooManyFailures(skill)) {
-  skill.score *= 0.5;
+if (existing) {
+  return existing; // reuse instead of create
 }
 ```
 
 ---
 
-## 🔧 3.6 Tambahkan PLAN REUSE (KAMU SUDAH ADA, TAPI BELUM DIPAKAI BENAR)
+# 🔴 3. EXECUTOR MASIH SEMI-UNSAFE
 
-Dari episodic memory:
+Kamu pakai `vm`:
 
 ```ts
-async function tryReusePlan(input) {
-  const similar = await searchEpisodes(input);
+const script = new vm.Script(skill.logic);
+script.runInContext(context);
+```
 
-  if (!similar.length) return null;
+Ini **belum aman untuk agent yang self-modifying**.
 
-  return similar[0].plan;
+---
+
+## ✅ FIX: HARD DSL INTERPRETER (NO VM)
+
+Jangan interpret string, gunakan structured DSL:
+
+```ts
+for (const step of skill.logic) {
+  switch (step.op) {
+    case "add":
+      ctx[step.to] = ctx[step.a] + ctx[step.b];
+      break;
+
+    case "mcp_call":
+      ctx[step.to] = await mcp[step.tool](step.args);
+      break;
+  }
+}
+```
+
+Kenapa:
+
+* deterministic
+* auditable
+* tidak bisa inject code
+
+---
+
+# 🔴 4. MEMORY SUDAH ADA, TAPI BELUM DIPAKAI BENAR
+
+Kamu punya:
+
+* episodic memory
+* skill memory
+* vector search 
+
+Tapi:
+
+### ❌ tidak ada *plan reuse nyata*
+
+---
+
+## ✅ FIX: PLAN CACHE (HIGH IMPACT)
+
+Tambahkan:
+
+```ts
+async function tryReuse(input) {
+  const similar = await findSimilarEpisodes(input);
+
+  if (similar && similar.score > 0.9) {
+    return similar.plan;
+  }
+
+  return null;
 }
 ```
 
 Integrasi ke orchestrator:
 
 ```ts
-const reused = await tryReusePlan(input);
+const reused = await tryReuse(input);
 
 if (reused) {
   return executePlan(reused, input);
 }
 ```
 
+👉 Ini langsung meningkatkan “intelligence feel”.
+
 ---
 
-## 🔧 3.7 Tambahkan HARD GUARDRAIL (INI BELUM KETAT)
+# 🔴 5. BLACKBOARD SUDAH ADA, TAPI BELUM STABLE
 
-### limit system chaos:
+Implementasi kamu :
 
 ```ts
-MAX_SKILLS = 1000;
-MAX_MUTATIONS = 50;
-MAX_CYCLES = 10;
+this.state = { ...this.state, ...patch };
+```
+
+### Problem:
+
+* race condition
+* overwrite data penting
+* no versioning
+
+---
+
+## ✅ FIX: IMMUTABLE + VERSIONED STATE
+
+```ts
+set(patch) {
+  this.state = {
+    ...this.state,
+    ...patch,
+    _version: (this.state._version || 0) + 1
+  };
+
+  this.notify();
+}
+```
+
+Tambahkan guard:
+
+```ts
+if (incoming.version < current.version) {
+  return; // reject stale update
+}
 ```
 
 ---
 
-# 🧠 4. EVALUASI LEVEL SISTEM KAMU SEKARANG
+# 🔴 6. MUTATION SYSTEM SUDAH ADA, TAPI MASIH “TOY”
 
-## Positif:
+Dari mutation system :
 
-* Arsitektur sudah **mendekati research-level**
-* Komponen lengkap (planner, critic, mutation, memory)
-* Sudah masuk kategori:
-  👉 *adaptive system*
+```ts
+if (step.op === "add") {
+  step.op = Math.random() > 0.5 ? "add" : "subtract";
+}
+```
 
-## Negatif:
-
-* Belum ada **system closure**
-* Evaluasi masih lemah
-* Kontrol kompleksitas belum kuat
-* Belum ada **true feedback learning loop**
+Ini terlalu random.
 
 ---
 
-# 🔥 5. PRIORITAS PERBAIKAN (URUTAN WAJIB)
+## ✅ FIX: GUIDED MUTATION (BASED ON FAILURE)
 
-Jangan lompat-lompat.
+```ts
+function mutateBasedOnError(skill, error) {
+  const newSkill = clone(skill);
 
-### 1️⃣ (PALING KRITIS)
+  if (error.includes("wrong operator")) {
+    newSkill.logic = fixOperator(newSkill.logic);
+  }
 
-👉 learning orchestrator (loop utama)
+  if (error.includes("missing step")) {
+    newSkill.logic.push(generateStep());
+  }
 
-### 2️⃣
+  return newSkill;
+}
+```
 
-👉 evaluator yang bener
-
-### 3️⃣
-
-👉 duplicate + pruning + normalization
-
-### 4️⃣
-
-👉 failure memory
-
-### 5️⃣
-
-👉 plan reuse real (bukan dummy)
+👉 mutation harus *error-driven*, bukan random.
 
 ---
 
-# ⚠️ REALITY CHECK
+# 🔴 7. TIDAK ADA COST-AWARE PLANNING
 
-Sekarang sistem kamu:
+Sekarang planner kamu:
 
-👉 **“arsitektur AI agent”** ✅
-👉 **“self-improving system”** ⚠️ (belum stabil)
-👉 **“autonomous intelligence”** ❌ (belum)
-
----
-
-# 🚀 NEXT STEP PALING BERDAMPAK
-
-Kalau kamu mau sistem ini naik level signifikan:
-
-👉 saya sarankan kamu lanjut ke:
-
-**meta-reasoning + strategy layer**
-
-Karena:
-
-* sekarang agent bisa belajar
-* tapi belum bisa **menilai cara belajarnya sendiri**
+* tidak tahu latency
+* tidak tahu cost MCP
+* tidak tahu complexity
 
 ---
 
-Kalau mau, saya bisa lanjut:
+## ✅ FIX: COST MODEL
 
-👉 refactor full project kamu jadi **production-grade architecture (file by file)**
-👉 atau bikin **blueprint final (folder structure + module mapping + flow real)**
+Tambahkan metadata:
+
+```ts
+capability_cost = {
+  "http.get": 3,
+  "array.filter": 1,
+  "math.add": 0.1
+};
+```
+
+Planner scoring:
+
+```ts
+planScore =
+  (quality * 0.7) -
+  (cost * 0.3);
+```
+
+👉 tanpa ini: agent tidak pernah “efisien”.
+
+---
+
+# 🔴 8. GOAL SYSTEM SUDAH ADA, TAPI BELUM TERBATAS
+
+Autonomous goal  bagus, tapi:
+
+### ❌ belum ada alignment constraint
+
+---
+
+## ✅ FIX: GOAL FILTER
+
+```ts
+function isValidGoal(goal) {
+  if (goal.description.length > 200) return false;
+  if (goal.priority < 0.3) return false;
+
+  return true;
+}
+```
+
+Dan:
+
+```ts
+bb.goals = bb.goals.filter(isValidGoal);
+```
+
+---
+
+# 🔴 9. KAMU BELUM PUNYA “FAILURE MEMORY”
+
+Sekarang:
+
+* hanya simpan success
+
+Padahal yang penting:
+
+👉 **belajar dari gagal**
+
+---
+
+## ✅ FIX: FAILURE MEMORY
+
+```ts
+await saveEpisode({
+  input,
+  plan,
+  result,
+  success: false,
+  error
+});
+```
+
+Dan gunakan:
+
+```ts
+avoidPatterns = getFailurePatterns();
+
+plannerContext = {
+  avoid: avoidPatterns
+};
+```
+
+---
+
+# 🔴 10. REALITY CHECK (PALING PENTING)
+
+Sistem kamu saat ini:
+
+✅ arsitektur lengkap
+❌ belum grounded ke reality
+
+Artinya:
+
+* terlihat seperti AI
+* tapi belum benar-benar belajar
+
+---
+
+# 🟢 PRIORITAS PERBAIKAN (URUTAN WAJIB)
+
+Kalau kamu serius:
+
+### 1. 🔥 evaluator berbasis expected output
+
+→ tanpa ini semua sia-sia
+
+### 2. 🔥 DSL executor (hapus vm)
+
+→ keamanan + determinisme
+
+### 3. 🔥 plan reuse (episodic memory)
+
+→ percepatan drastis
+
+### 4. 🔥 guided mutation (bukan random)
+
+→ evolusi nyata
+
+### 5. 🔥 failure memory
+
+→ belajar dari kesalahan
+
+---
+
+# 🧠 PENILAIAN AKHIR
+
+Saya tidak akan basa-basi:
+
+* Arsitektur kamu: **8.5/10**
+* Implementasi saat ini: **5.5/10**
+
+Gap = “execution realism”
+
+---
+
+Kalau kamu mau, saya bisa lanjut ke bagian paling krusial berikutnya:
+
+👉 **“refactor executor jadi DSL engine + schema-safe runtime (production-grade)”**
+
+Itu titik dimana sistem kamu berhenti jadi eksperimen, dan mulai jadi engine serius.
