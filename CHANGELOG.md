@@ -7,6 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.0] - 2026-04-07
+
+### Summary
+Implemented **closed-loop learning system** - unifying all components into a single adaptive learning architecture.
+
+### Added
+
+#### Master Learning Loop (NEW)
+- **`core/masterLearningLoop.js`** - Core orchestration layer
+  - Phase 1: Goal selection
+  - Phase 2: Memory retrieval (episodic memory)
+  - Phase 3: Planning with memory + bandit
+  - Phase 4: Bandit-based plan selection
+  - Phase 5: Execution (DSL/MCP/Code)
+  - Phase 6: Real evaluation (ground truth based)
+  - Phase 7: Learning (skill update, mutation, versioning)
+  - Phase 8: Memory update
+  - Config: maxCycles=5, successThreshold=0.8, failLimit=3
+
+#### Learning Phase (NEW)
+- **`core/learningPhase.js`** - Closed-loop learning mechanism
+  - `updateSkillStatsWithFeedback()` - Updates skill usage, success count, confidence
+  - `createSkillVersion()` - Creates new version on improvement
+  - `attemptSkillMutation()` - Exploration with validation
+  - `applySkillDecay()` - Time-based score decay
+  - `pruneLowQualitySkills()` - Removes underperforming skills
+  - Config: improvementThreshold=0.1, minUsageForMutation=3
+
+#### Unified Evaluator (NEW)
+- **`core/unifiedEvaluator.js`** - Real task-specific scoring
+  - Ground truth based scoring (not dummy)
+  - Task-specific score functions per capability
+  - Multi-factor scoring: taskCorrectness(60%) + schemaValidity(15%) + robustness(15%) + efficiency(10%)
+  - Test-case based evaluation (normal + edge + random cases)
+  - Generates improvement suggestions
+
+#### Integrated Planner (NEW)
+- **`core/integratedPlanner.js`** - Memory-aware planning
+  - `tryMemoryReuse()` - Reuses plans from episodic memory
+  - `generateNewPlans()` - Generates plans with capability filtering
+  - `enhanceWithContext()` - Adds relevant episode context to plans
+  - `extractCapability()` - Detects capability from goal text
+
+#### Plan Selector (NEW)
+- **`core/planSelector.js`** - Bandit-based selection
+  - UCB (Upper Confidence Bound) algorithm
+  - Prevents local optimum trap
+  - Config: explorationConstant=1.2, enableEpsilonGreedy=false
+  - Supports diversity checking and parallel selection
+
+#### Unified Executor (NEW)
+- **`core/unifiedExecutor.js`** - Multi-mode execution
+  - DSL execution (skill with logic)
+  - MCP execution (external API calls)
+  - Code execution (sandboxed - placeholder)
+  - Output normalization to consistent format: `{ status, data, error, type }`
+
+#### Skill Registry (NEW)
+- **`core/skillRegistry.js`** - Skill management with bandit
+  - `register()` / `unregister()` - Skill lifecycle
+  - `updateStats()` - Updates score based on execution feedback
+  - `selectWithBandit()` - UCB-based skill selection
+  - Version tracking for each skill
+
+### Fixed
+
+#### Executor DSL Format
+- **Changed** from `params: ["a", "b"]` to correct format:
+  ```javascript
+  { op: "add", a: "input.a", b: "input.b", to_output: "result" }
+  ```
+
+#### resolveValue Function
+- **Fixed** to properly handle `input.X` and `memory.X` references
+- Added null/undefined check at start
+
+### Architecture Change
+
+```
+BEFORE (Fragmented):
+  Planner → execute separately
+  Executor → separate
+  Evaluator → dummy scoring
+  Learning → isolated
+  Memory → not integrated
+
+AFTER (Unified Closed-Loop):
+  Goal → Plan → Execute → Evaluate → Learn → Memory → Repeat
+```
+
+### Testing
+- Integration test: 6/6 passing
+- Direct execution: add 5+3=8 ✅, multiply 4*6=24 ✅
+- Evaluator: runs and produces scores
+- Skill Registry: bandit selection works
+
+---
+
 ## Architecture Analysis (2026-04-07)
 
 ### What's Already Implemented (✅)

@@ -17,7 +17,21 @@ function containsDangerousCode(code) {
 }
 
 function resolveValue(val, ctx) {
+  if (val === undefined || val === null) return undefined;
+  
   if (typeof val === "string") {
+    // Handle input.X references directly
+    if (val.startsWith("input.")) {
+      const key = val.slice(6);  // Remove "input." prefix
+      return ctx.input?.[key];
+    }
+    
+    // Handle memory.X references
+    if (val.startsWith("memory.")) {
+      const key = val.slice(7);  // Remove "memory." prefix
+      return ctx.memory?.[key];
+    }
+    
     if (ctx.memory[val] !== undefined) {
       return ctx.memory[val];
     }
