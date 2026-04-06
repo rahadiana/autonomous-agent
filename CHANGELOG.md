@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## Architecture Analysis (2026-04-07)
+
+### What's Already Implemented (✅)
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| EpisodicMemory | ✅ | Episode stores: goal, plan, result, score, embedding |
+| Plan Reuse | ✅ | `findReusablePlan()` - episode/template lookup by similarity |
+| Template Abstraction | ✅ | generalizeGoal, injectVariables, TemplateStore |
+| Ground Truth + Evaluator | ✅ | testRunner.js - skill-level evaluation |
+| Cost Tracking | ✅ | production.js - RealCostTracker |
+
+### Identified Gaps (❌)
+
+| Issue | Status | Impact |
+|-------|--------|--------|
+| **Global objective function** | ❌ Missing | Evaluator only does skill-level, not end-to-end goal evaluation |
+| **Cost-aware planning** | ⚠️ Partial | CostTracker exists but NOT integrated into plan selection |
+| **Directed mutation** | ❌ | skillService mutation still uses `Math.random()` |
+| **Blackboard versioning** | ⚠️ | Locking exists, no transaction/versioning |
+
+### Flow Analysis
+
+```
+CURRENT (Skill-Level Only):
+  goal → classify → plan → execute → reasoner.evaluate(skill)
+                                                    ↓
+                              SKILL evaluation (correctness, schema)
+
+NEEDED (End-to-End):
+  goal → classify → plan → execute → evaluateGoal(goal, result)
+                                                    ↓
+                              GLOBAL evaluation (success, cost, latency, correctness)
+```
+
+### Next Priority Implementation
+
+1. **Add `evaluateGoal(goal, result)`** - Global end-to-end scoring
+2. **Integrate cost/latency** into plan selection
+3. **Directed mutation** - failure-based, not random
+4. **Blackboard transaction** - versioning + rollback
+
+---
+
 ## [1.0.0] - 2026-04-07
 
 ### Summary
