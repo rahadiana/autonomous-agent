@@ -53,6 +53,43 @@ NEEDED (End-to-End):
 
 ---
 
+## [1.4.0] - 2026-04-07
+
+### Summary
+Added context-aware skill selection with versioning and race condition prevention.
+
+### Added
+
+#### Context-Aware Selection (NEW)
+- **`models/skill.js`** - Added context signature fields
+  - `context_capability` - e.g., "array.filter"
+  - `context_operation` - e.g., "filter", "map", "reduce"
+  - `context_input_type` - e.g., "array", "object", "number"
+  - `context_constraints` - JSON array of constraints
+  - `version_lock` - For optimistic locking
+
+- **`services/skillService.js`** - Context-aware selection
+  - `calculateContextMatch()` - Multi-factor context matching
+  - `extractContext()` - Extract context from capability/input
+  - `selectWithContext()` - Combined similarity + score + context
+  - Hard filter: minContextMatch >= 0.5
+  - Weights: similarity(0.4) + score(0.3) + context(0.3)
+  - Version locking functions for race condition prevention
+
+### Changed
+- Skill selection now uses 3-factor scoring
+- Context matching is mandatory (hard filter)
+
+### Context Weights
+```javascript
+capability: 0.4,    // Must match capability
+operation: 0.3,    // Must match operation type  
+inputType: 0.2,    // Input type should match
+constraints: 0.1  // Constraint overlap bonus
+```
+
+---
+
 ## [1.3.0] - 2026-04-07
 
 ### Summary

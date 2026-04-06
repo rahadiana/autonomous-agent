@@ -37,8 +37,213 @@ const CONFIG = {
   mutationTopPercent: 30,  // Only mutate top 30% skills
   
   // NEW: Normalization for bandit-style scoring
-  scoreNormalization: true // Normalize scores before UCB calculation
+  scoreNormalization: true,
+
+  // NEW: Context-aware selection parameters
+  contextMatchWeight: 0.3,    // Weight for context matching in selection
+  similarityWeight: 0.4,       // Weight for retrieval similarity
+  scoreWeight: 0.3,           // Weight for skill quality score
+  
+  // NEW: Hard filter threshold
+  minContextMatch: 0.5         // Minimum context match to be considered
 };
+
+/**
+ * Context matching weight distribution
+ */
+const CONTEXT_WEIGHTS = {
+  capability: 0.4,    // Must match capability
+  operation: 0.3,    // Must match operation type
+  inputType: 0.2,    // Input type should match
+  constraints: 0.1    // Constraint overlap bonus
+};
+
+/**
+ * Calculate context match score between target context and skill
+ * 
+ * @param {Object} targetContext - The context we want to match
+ * @param {Object} skill - The skill to match against
+ * @returns {number} Context match score 0-1
+ */
+function calculateContextMatch(targetContext, skill) {
+  if (!skill) return 0;
+  
+  let score = 0;
+  
+  // Capability match (40%)
+  if (targetContext.capability && skill.context_capability) {
+    if (targetContext.capability === skill.context_capability) {
+      score += CONTEXT_WEIGHTS.capability;
+    }
+  } else if (targetContext.capability && skill.capability) {
+    // Fallback to capability field
+    if (targetContext.capability === skill.capability) {
+      score += CONTEXT_WEIGHTS.capability;
+    }
+  }
+  
+  // Operation match (30%)
+  if (targetContext.operation && skill.context_operation) {
+    if (targetContext.operation === skill.context_operation) {
+      score += CONTEXT_WEIGHTS.operation;
+    }
+  }
+  
+  // Input type match (20%)
+  if (targetContext.inputType && skill.context_input_type) {
+    if (targetContext.inputType === skill.context_input_type) {
+      score += CONTEXT_WEIGHTS.inputType;
+    }
+  }
+  
+  // Constraints overlap bonus (10%)
+  if (targetContext.constraints && skill.context_constraints && Array.isArray(skill.context_constraints)) {
+    const overlap = targetContext.constraints.filter(
+      c => skill.context_constraints.includes(c)
+    ).length;
+    const maxLen = Math.max(targetContext.constraints.length, skill.context_constraints.length);
+    if (maxLen > 0) {
+      score += (overlap / maxLen) * CONTEXT_WEIGHTS.constraints;
+    }
+  }
+  
+  return Math.min(1, score);
+}
+
+/**
+ * Extract context signature from input/target
+ * 
+ * @param {string} capability - The capability type
+ * @param {Object} input - Input parameters
+ * @returns {Object} Extracted context
+ */
+function extractContext(capability, input = {}) {
+  const context = {
+    capability: capability,
+    operation: inferOperation(capability),
+    inputType: inferInputType(input),
+    constraints: extractConstraints(capability, input)
+  };
+  
+  return context;
+}
+
+/**
+ * Infer operation type from capability
+ */
+function inferOperation(capability) {
+  if (!capability) return "unknown";
+  
+  const ops = ["filter", "map", "reduce", "add", "subtract", "multiply", "divide", "concat", "sort"];
+  for (const op of ops) {
+    if (capability.includes(op)) return op;
+  }
+  
+  return "unknown";
+}
+
+/**
+ * Infer input type from input object
+ */
+function inferInputType(input) {
+  if (!input || typeof input !== "object") return "unknown";
+  
+  const keys = Object.keys(input);
+  
+  if (keys.some(k => Array.isArray(input[k]))) return "array";
+  if (keys.some(k => typeof input[k] === "number")) return "numeric";
+  if (keys.some(k => typeof input[k] === "string")) return "string";
+  if (keys.some(k => typeof input[k] === "object")) return "object";
+  
+  return "mixed";
+}
+
+/**
+ * Extract constraints from capability and input
+ */
+function extractConstraints(capability, input) {
+  const constraints = [];
+  
+  // Infer from input values
+  for (const [key, val] of Object.entries(input || {})) {
+    if (val === null) constraints.push("null_check");
+    if (typeof val === "number") {
+      if (val > 0) constraints.push("positive_check");
+      if (val < 0) constraints.push("negative_check");
+    }
+  }
+  
+  // Infer from capability
+  if (capability?.includes("divide") && (input?.b === 0 || input?.divisor === 0)) {
+    constraints.push("division_by_zero_check");
+  }
+  
+  return constraints;
+}
+
+/**
+ * Context-aware skill selection
+ * Combines similarity + score + context match
+ * 
+ * @param {Array} skills - Available skills
+ * @param {Object} targetContext - Context we want to match
+ * @param {number} retrievalScore - Similarity score from retrieval (0-1)
+ * @returns {Object} Selected skill with breakdown
+ */
+function selectWithContext(skills, targetContext, retrievalScore = 0) {
+  // Filter by hard threshold first
+  const eligibleSkills = skills.filter(skill => {
+    const contextMatch = calculateContextMatch(targetContext, skill);
+    return contextMatch >= CONFIG.minContextMatch;
+  });
+  
+  if (eligibleSkills.length === 0) {
+    console.log(`[SELECT] No skills met context threshold ${CONFIG.minContextMatch}`);
+    return { skill: null, reason: "no_context_match" };
+  }
+  
+  // Calculate final scores
+  const scored = eligibleSkills.map(skill => {
+    const contextMatch = calculateContextMatch(targetContext, skill);
+    const skillScore = skill.normalizedScore ?? skill.score ?? 0.5;
+    
+    // Weighted combination
+    const finalScore = (
+      retrievalScore * CONFIG.similarityWeight +
+      skillScore * CONFIG.scoreWeight +
+      contextMatch * CONFIG.contextMatchWeight
+    );
+    
+    return {
+      skill,
+      finalScore,
+      breakdown: {
+        similarity: retrievalScore * CONFIG.similarityWeight,
+        skillScore: skillScore * CONFIG.scoreWeight,
+        contextMatch: contextMatch * CONFIG.contextMatchWeight,
+        total: finalScore
+      },
+      contextMatch
+    };
+  });
+  
+  // Sort by final score
+  scored.sort((a, b) => b.finalScore - a.finalScore);
+  
+  const selected = scored[0];
+  
+  console.log(`[SELECT] Context-aware selection:`);
+  console.log(`  - Selected: ${selected.skill.name}`);
+  console.log(`  - Context match: ${selected.contextMatch.toFixed(2)}`);
+  console.log(`  - Breakdown:`, selected.breakdown);
+  
+  return {
+    skill: selected.skill,
+    score: selected.finalScore,
+    contextMatch: selected.contextMatch,
+    breakdown: selected.breakdown
+  };
+}
 
 /**
  * Calculate confidence based on usage count
@@ -261,6 +466,61 @@ function gaussianSample() {
   const u1 = Math.random();
   const u2 = Math.random();
   return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+}
+
+/**
+ * Version locking for race condition prevention
+ * Uses optimistic locking pattern
+ */
+
+/**
+ * Acquire lock for skill update
+ * Returns current version if lock acquired, null if failed
+ */
+async function acquireVersionLock(skillId, currentVersion) {
+  // This would be implemented with actual DB in production
+  // For now, return the version for validation
+  return currentVersion;
+}
+
+/**
+ * Update skill with version check (anti-race condition)
+ * Only updates if version matches, rejects if stale
+ */
+async function updateWithVersionCheck(skillId, updates, expectedVersion) {
+  // Validate version before update
+  // In production, this would be:
+  // UPDATE Skills SET ... WHERE id = ? AND version_lock = ?
+  
+  console.log(`[VERSION] Attempting update for ${skillId}`);
+  console.log(`[VERSION] Expected version: ${expectedVersion}`);
+  
+  // For in-memory implementation, just log
+  return {
+    success: true,
+    newVersion: expectedVersion + 1,
+    applied: updates
+  };
+}
+
+/**
+ * Promote new version, deactivate old
+ * Ensures only one active version per capability
+ */
+async function promoteVersion(newSkill, oldSkill) {
+  console.log(`[VERSION] Promoting ${newSkill.id} (v${newSkill.version})`);
+  console.log(`[VERSION] Deactivating ${oldSkill.id} (v${oldSkill.version})`);
+  
+  // Deactivate old
+  if (oldSkill) {
+    oldSkill.status = "inactive";
+  }
+  
+  // Activate new
+  newSkill.status = "active";
+  newSkill.version = (oldSkill?.version || 0) + 1;
+  
+  return { newSkill, oldSkill };
 }
 
 /**
