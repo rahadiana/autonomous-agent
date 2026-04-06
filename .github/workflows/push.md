@@ -1,1 +1,51 @@
-.
+name: Bun Opencode Test
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Verify Bun
+        run: bun --version
+
+      # Install opencode (global)
+      - name: Install opencode
+        run: |
+          bun install -g opencode-ai
+          sleep 5
+
+      - name: Verify opencode
+        run: opencode --help
+
+      # Contoh eksekusi
+      - name: Run opencode plan
+        run: cat excec_temp.sh | sh
+
+      - name: Commit
+        run: |
+          git config --global --add safe.directory /github/workspace
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "update" || echo "No changes to commit"
+
+      - name: GitHub Push
+        uses: ad-m/github-push-action@master
+        with:
+          force: true
+          directory: "."
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref }}
