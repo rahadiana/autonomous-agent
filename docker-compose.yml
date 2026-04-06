@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  # Main application (API + Coordinator)
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      STORAGE_TYPE: memory
+      LOG_LEVEL: info
+      API_KEY: ${API_KEY:-dev_key_12345}
+      MAX_WORKERS: 4
+    restart: unless-stopped
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./config/prometheus_alerts.yml:/etc/prometheus/alerts.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+    depends_on:
+      - app
+
+  # Grafana for dashboards
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./config/grafana_dashboard.json:/var/lib/grafana/dashboards/autonomous_agent.json
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus_data:
+  grafana_data:
