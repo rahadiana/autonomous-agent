@@ -49,6 +49,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Uncertainty-aware exploration (10% random from top 50%)
   - Confidence metric (usage/20 for final score blend)
   - Full monitoring metrics export
+  
+#### NEW: Additional Stabilization Fixes
+- **Skill cooldown** - 5 minute cooldown for newly created skills
+  - Prevents newly created skills from being overused immediately
+  - Prevents "flash in the pan" effect
+  
+- **Normalized bandit scoring** - Score normalization for fair comparison
+  - Maps scores to [0, 1] range before UCB calculation
+  - Prevents bias from absolute score differences
+  
+- **Constrained mutation** (disabled but implemented)
+  - mutationMinUsage: 5 (minimum uses before mutation allowed)
+  - mutationTopPercent: 30 (only mutate top 30% skills)
+  - Lineage safety: doesn't mutate bad or unproven skills
 
 #### Configuration
 - **All parameters centralized in CONFIG object:**
@@ -56,12 +70,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   {
     reEvalInterval: 5,         // Re-evaluate every 5 uses
     explorationRate: 0.1,     // 10% exploration
-    decayRate: 0.02,          // 2% score decay per day
-    mutationRate: 0.0,        // DISABLED
-    scoreInertia: 0.7,        // 70% old, 30% new
-    reEvalCooldown: 3600000,  // 1 hour between re-evals
-    confidenceCap: 20,       // Full confidence at 20 uses
-    confidenceWeight: 0.2     // 20% confidence in score
+    decayRate: 0.02,           // 2% score decay per day
+    mutationRate: 0.0,         // DISABLED
+    scoreInertia: 0.7,         // 70% old, 30% new
+    reEvalCooldown: 3600000,    // 1 hour between re-evals
+    confidenceCap: 20,        // Full confidence at 20 uses
+    confidenceWeight: 0.2,    // 20% confidence in score
+    
+    // NEW: Additional stabilization
+    skillCooldown: 300000,     // 5 min cooldown for new skills
+    mutationMinUsage: 5,       // Min uses before mutation
+    mutationTopPercent: 30,    // Only mutate top 30%
+    scoreNormalization: true   // Normalize scores for bandit
   }
   ```
 

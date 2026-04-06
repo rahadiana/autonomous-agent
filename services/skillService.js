@@ -20,8 +20,18 @@ const CONFIG = {
   reEvalCooldown: 3600000, // 1 hour cooldown between re-evaluations
   
   // Confidence parameters
-  confidenceCap: 20,       // Confidence reaches 1.0 at this usage count
-  confidenceWeight: 0.2    // Weight of confidence in final score
+  confidenceCap: 20,       // Full confidence at 20 uses
+  confidenceWeight: 0.2,    // 20% confidence in final score
+  
+  // NEW: Skill cooldown (newly created skills need time before being used)
+  skillCooldown: 300000,    // 5 minutes cooldown for new skills
+  
+  // NEW: Lineage tracking (don't mutate low-usage or bad lineage)
+  mutationMinUsage: 5,      // Minimum 5 uses before mutation allowed
+  mutationTopPercent: 30,  // Only mutate top 30% skills
+  
+  // NEW: Normalization for bandit-style scoring
+  scoreNormalization: true // Normalize scores before UCB calculation
 };
 
 /**
@@ -30,6 +40,56 @@ const CONFIG = {
  */
 function getConfidence(usageCount) {
   return Math.min(usageCount / CONFIG.confidenceCap, 1.0);
+}
+
+/**
+ * Check if skill is in cooldown period (newly created)
+ * NEW: Prevents newly created skills from being overused immediately
+ */
+function isInCooldown(skill) {
+  if (!skill.created_at) return false;
+  
+  const now = Date.now();
+  const created = new Date(skill.created_at).getTime();
+  const cooldownMs = CONFIG.skillCooldown;
+  
+  return (now - created) < cooldownMs;
+}
+
+/**
+ * Normalize score for bandit-style selection
+ * NEW: Maps scores to [0, 1] range for fair comparison
+ */
+function normalizeScore(skills) {
+  if (skills.length === 0) return skills;
+  
+  const scores = skills.map(s => s.score);
+  const min = Math.min(...scores);
+  const max = Math.max(...scores);
+  
+  if (max === min) {
+    return skills.map(s => ({ ...s, normalizedScore: 0.5 }));
+  }
+  
+  return skills.map(s => ({
+    ...s,
+    normalizedScore: (s.score - min) / (max - min)
+  }));
+}
+
+/**
+ * Check if skill is eligible for mutation
+ * NEW: Constrains mutation to mature, high-quality skills
+ */
+function canMutate(skill) {
+  // Must have minimum usage
+  if (skill.usage_count < CONFIG.mutationMinUsage) {
+    return { eligible: false, reason: "usage_too_low" };
+  }
+  
+  // Must be in top percentile
+  // This will be checked by the caller with full context
+  return { eligible: true, reason: "ok" };
 }
 
 /**
@@ -43,14 +103,30 @@ function getExplorationScore(skill) {
 }
 
 /**
- * Select a skill with EXPLORATION (uncertainty-aware)
+ * Select a skill with EXPLORATION (uncertainty-aware + cooldown + normalized)
  * - 90%: select best by final score (score + confidence)
  * - 10%: random selection from TOP 50% by exploration score
+ * - SKIPS skills in cooldown period
+ * - Uses normalized scores for fair comparison
  */
 function selectWithExploration(skills) {
+  // Filter out skills in cooldown
+  const availableSkills = skills.filter(s => !isInCooldown(s));
+  
+  if (availableSkills.length === 0) {
+    // If all skills in cooldown, fall back to original list
+    console.log("[SELECT] All skills in cooldown, allowing cooldown skills");
+    return skills[0];
+  }
+  
+  // Normalize scores if enabled
+  let processedSkills = CONFIG.scoreNormalization 
+    ? normalizeScore(availableSkills) 
+    : availableSkills.map(s => ({ ...s, normalizedScore: s.score }));
+  
   if (Math.random() < CONFIG.explorationRate) {
     // Calculate exploration scores and pick from top 50%
-    const withExplorationScore = skills.map(s => ({
+    const withExplorationScore = processedSkills.map(s => ({
       skill: s,
       explorationScore: getExplorationScore(s)
     }));
@@ -62,14 +138,14 @@ function selectWithExploration(skills) {
     const randomIdx = Math.floor(Math.random() * topHalf.length);
     const selected = topHalf[randomIdx].skill;
     
-    console.log(`[EXPLORE] Uncertainty-aware pick: ${selected.name} (score: ${selected.score.toFixed(2)}, usage: ${selected.usage_count})`);
+    console.log(`[EXPLORE] Uncertainty-aware pick: ${selected.name} (score: ${selected.normalizedScore?.toFixed(2) || selected.score.toFixed(2)}, usage: ${selected.usage_count})`);
     return selected;
   }
   
   // Exploitation: select based on final score (score + confidence blend)
-  const withFinalScore = skills.map(s => ({
+  const withFinalScore = processedSkills.map(s => ({
     skill: s,
-    finalScore: s.score * (1 - CONFIG.confidenceWeight) + getConfidence(s.usage_count) * CONFIG.confidenceWeight
+    finalScore: (s.normalizedScore ?? s.score) * (1 - CONFIG.confidenceWeight) + getConfidence(s.usage_count) * CONFIG.confidenceWeight
   }));
   
   withFinalScore.sort((a, b) => b.finalScore - a.finalScore);
@@ -187,19 +263,45 @@ export async function handleRequest(input, capability) {
     await skill.update({ last_evaluated_at: new Date() });
   }
 
-  // Mutation logic (with better scoring)
-  if (Math.random() < CONFIG.mutationRate) {
-    const mutated = mutateSkill(skill.json);
+  // Mutation logic (with CONSTRAINTS)
+  // Only mutate if:
+  // 1. Mutation is enabled (mutationRate > 0)
+  // 2. Skill has minimum usage (mutationMinUsage)
+  // 3. Skill is in top percentile (mutationTopPercent)
+  if (CONFIG.mutationRate > 0 && Math.random() < CONFIG.mutationRate) {
+    // Check minimum usage requirement
+    const mutationCheck = canMutate(skill);
+    if (!mutationCheck.eligible) {
+      console.log(`[MUTATION] Skipped: ${skill.name} - ${mutationCheck.reason}`);
+    } else {
+      // Check if skill is in top percentile
+      const allSkills = await Skill.findAll({
+        where: { capability, status: "active" }
+      });
+      
+      // Sort by score and check if in top percent
+      allSkills.sort((a, b) => b.score - a.score);
+      const topCount = Math.ceil(allSkills.length * (CONFIG.mutationTopPercent / 100));
+      const topSkills = allSkills.slice(0, topCount);
+      
+      const isTopSkill = topSkills.some(s => s.id === skill.id);
+      
+      if (!isTopSkill) {
+        console.log(`[MUTATION] Skipped: ${skill.name} - not in top ${CONFIG.mutationTopPercent}%`);
+      } else {
+        const mutated = mutateSkill(skill.json);
 
-    const testResult = await runSkill(mutated, input);
+        const testResult = await runSkill(mutated, input);
 
-    // Evaluate mutated skill
-    const mutatedEval = await evaluateSkill(mutated, capability);
+        // Evaluate mutated skill
+        const mutatedEval = await evaluateSkill(mutated, capability);
 
-    // Only create version if mutation is actually better
-    if (mutatedEval.score > skill.score + 0.05) {
-      await createVersion(skill, mutated);
-      console.log(`[MUTATION] New version created: ${skill.name} (score: ${mutatedEval.score.toFixed(2)})`);
+        // Only create version if mutation is actually better
+        if (mutatedEval.score > skill.score + 0.05) {
+          await createVersion(skill, mutated);
+          console.log(`[MUTATION] New version created: ${skill.name} (score: ${mutatedEval.score.toFixed(2)})`);
+        }
+      }
     }
   }
 
@@ -211,8 +313,9 @@ async function updateSkillScore(skill, newEvaluatorScore, capability) {
   // newScore = oldScore * 0.7 + newEvaluation * 0.3
   const smoothedScore = applyScoreSmoothing(skill.score, newEvaluatorScore);
 
-  // Apply floor to prevent over-decay
-  const finalScore = Math.max(smoothedScore, CONFIG.decayFloor);
+  // Soft floor is handled in applyFreshnessDecay, not here
+  // Skills below 0.2 get pushed to 0.1 (soft floor)
+  const finalScore = smoothedScore;
 
   await skill.update({
     score: finalScore,
