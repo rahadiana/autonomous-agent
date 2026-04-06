@@ -1,11 +1,30 @@
+/**
+ * Simple scoring helper for backward compatibility
+ * Note: New code should use evaluateSkill() from testRunner.js instead
+ */
+
+import { validate } from "./validator.js";
+
+/**
+ * Basic scoring based on validation result only
+ * @deprecated Use evaluateSkill() from testRunner.js for proper evaluation
+ * @param {any} result - skill output
+ * @param {boolean} valid - schema validation result
+ * @returns {number} score between 0 and 1
+ */
 export function evaluate(result, valid) {
-  let score = 0;
+  // Simple binary score - valid = 1, invalid = 0
+  // This is kept for backward compatibility only
+  return valid ? 1.0 : 0.0;
+}
 
-  if (valid) score += 0.4;
-  if (result !== undefined) score += 0.3;
-
-  score += 0.2;
-  score += 0.1;
-
-  return score;
+/**
+ * Calculate score from evaluation result
+ * Used by other parts of the system that expect evaluate() format
+ * @param {Object} evalResult - result from evaluateSkill()
+ * @returns {number} score between 0 and 1
+ */
+export function scoreFromEvaluation(evalResult) {
+  if (!evalResult) return 0;
+  return evalResult.score || 0;
 }

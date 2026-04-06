@@ -14,6 +14,10 @@ export const Skill = sequelize.define("Skill", {
   success_count: { type: DataTypes.INTEGER, defaultValue: 0 },
   failure_count: { type: DataTypes.INTEGER, defaultValue: 0 },
 
+  status: { type: DataTypes.STRING, defaultValue: "active" }, // active, inactive, deprecated
+  
+  last_evaluated_at: { type: DataTypes.DATE, defaultValue: null }, // For re-eval cooldown
+
   version: { type: DataTypes.INTEGER, defaultValue: 1 },
   parent_id: DataTypes.UUID,
 

@@ -1,36 +1,28 @@
 import test from "node:test";
 import assert from "node:assert";
-import { evaluate } from "../core/scoring.js";
+import { evaluate, scoreFromEvaluation } from "../core/scoring.js";
 
-test("evaluate returns 1.0 for valid result with data", () => {
+test("evaluate returns 1.0 for valid result", () => {
   const score = evaluate({ result: 42 }, true);
-  assert.ok(Math.abs(score - 1.0) < 0.0001);
+  assert.strictEqual(score, 1.0);
 });
 
-test("evaluate returns 0.6 for invalid result with data", () => {
+test("evaluate returns 0.0 for invalid result", () => {
   const score = evaluate({ result: 42 }, false);
-  assert.strictEqual(score, 0.6);
+  assert.strictEqual(score, 0.0);
 });
 
-test("evaluate returns 0.7 for valid result with undefined", () => {
-  const score = evaluate(undefined, true);
-  assert.ok(Math.abs(score - 0.7) < 0.0001);
+test("scoreFromEvaluation extracts score from eval result", () => {
+  const score = scoreFromEvaluation({ score: 0.85, accuracy: 0.75 });
+  assert.strictEqual(score, 0.85);
 });
 
-test("evaluate returns 0.3 for invalid result with undefined", () => {
-  const score = evaluate(undefined, false);
-  assert.ok(Math.abs(score - 0.3) < 0.0001);
+test("scoreFromEvaluation handles null", () => {
+  const score = scoreFromEvaluation(null);
+  assert.strictEqual(score, 0);
 });
 
-test("evaluate returns 0.3 for valid empty object", () => {
-  const score = evaluate({}, true);
-  assert.ok(Math.abs(score - 1.0) < 0.0001);
-});
-
-test("evaluate score components breakdown", () => {
-  const validScore = evaluate({ data: "test" }, true);
-  assert.ok(validScore >= 0.9);
-
-  const invalidScore = evaluate({ data: "test" }, false);
-  assert.strictEqual(invalidScore, 0.6);
+test("scoreFromEvaluation handles missing score", () => {
+  const score = scoreFromEvaluation({ accuracy: 0.75 });
+  assert.strictEqual(score, 0);
 });
