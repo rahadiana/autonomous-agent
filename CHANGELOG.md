@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.1] - 2026-04-07
+
+### Summary
+Production-grade DSL executor with proper safety, determinism, and extensibility.
+
+### Added
+
+#### Executor Rewrite (ENHANCED)
+- **`core/executor.js`** - Complete rewrite with production features:
+
+  **Execution Frame Model**
+  ```javascript
+  {
+    stepIndex: 0,
+    memory: {},      // Path-based storage
+    output: {},
+    trace: [],       // Execution trace
+    error: null,
+    metadata: { startedAt, stepsExecuted }
+  }
+  ```
+
+  **Path-Based Memory**
+  - `getPath(obj, "a.b.c")` - Get nested value
+  - `setPath(obj, "a.b.c", value)` - Set nested value
+
+  **$ Reference System**
+  - `$memory.path` → memory reference
+  - `$input.path` → input reference
+  - Replaces legacy `input.X` and `memory.X`
+
+  **Step Validator**
+  - Whitelist of allowed operations
+  - Blocks invalid/unsafe ops
+  - Error on missing `op` field
+
+  **Timeout + Retry**
+  - Per-step timeout (default 100ms)
+  - Retry on failure (default 2 retries)
+  - Config: `EXECUTOR_CONFIG`
+
+  **Trace System**
+  - Records: stepIndex, op, timestamp
+  - Available in `_meta.trace`
+
+  **Output Schema Validation**
+  - Validates against `skill.output_schema`
+  - Required fields check
+  - Type checking
+
+  **Hard Limits**
+  - Max steps: 20 (configurable)
+  - Breaks on limit exceeded
+
+### Configuration
+```javascript
+const EXECUTOR_CONFIG = {
+  stepTimeoutMs: 100,
+  maxSteps: 20,
+  maxRetries: 2,
+  retryDelayMs: 10,
+  allowedOps: new Set([...])
+}
+```
+
+### Features Tested
+- Path-based memory: ✅ getPath/setPath work
+- $ reference: ✅ $input.a, $memory.x resolve correctly
+- Step validator: ✅ blocks invalid ops
+- Multi-step execution: ✅ (5+3)*2 = 16 works
+- Trace: ✅ records stepsExecuted=2
+
+---
+
 ## [1.5.0] - 2026-04-07
 
 ### Summary

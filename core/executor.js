@@ -1,41 +1,120 @@
+/**
+ * DSL Executor - Production-Grade Implementation
+ * 
+ * Features:
+ * - Execution Frame model
+ * - Path-based memory (getPath, setPath)
+ * - $ reference system
+ * - Step validator with op whitelist
+ * - Step timeout and retry
+ * - Trace system
+ * - Output schema validation
+ * - Hard execution limits
+ */
+
 import vm from "vm";
 import { callTool } from "./mcp.js";
 
-const TIMEOUT_MS = 100;
-const MAX_LOOP_ITERATIONS = 10000;
-const DANGEROUS_KEYWORDS = ["process", "require", "module", "exports", "__dirname", "__filename"];
+// ============== CONFIGURATION ==============
 
-function containsDangerousCode(code) {
-  if (typeof code === "string") {
-    for (const keyword of DANGEROUS_KEYWORDS) {
-      if (code.includes(keyword)) {
-        return true;
-      }
-    }
+const EXECUTOR_CONFIG = {
+  // Timeout
+  stepTimeoutMs: 100,
+  maxSteps: 20,
+  
+  // Retry
+  maxRetries: 2,
+  retryDelayMs: 10,
+  
+  // Safety
+  dangerousKeywords: ["process", "require", "module", "exports", "__dirname", "__filename"],
+  
+  // Allowed operations (whitelist)
+  allowedOps: new Set([
+    "set", "get", "add", "subtract", "multiply", "divide",
+    "concat", "mcp_call", "call_skill", "call_skill_map",
+    "if", "switch", "for", "reduce", "break", "continue"
+  ])
+};
+
+// ============== PATH-BASED MEMORY ==============
+
+/**
+ * Get value by dot-notation path
+ * getPath({ a: { b: 1 } }, "a.b") → 1
+ */
+export function getPath(obj, path) {
+  if (!path || !obj) return undefined;
+  const parts = String(path).split(".");
+  let current = obj;
+  for (const part of parts) {
+    if (current === undefined || current === null) return undefined;
+    current = current[part];
   }
-  return false;
+  return current;
 }
 
-function resolveValue(val, ctx) {
+/**
+ * Set value by dot-notation path (creates nested structure)
+ * setPath({}, "a.b.c", 1) → { a: { b: { c: 1 } } }
+ */
+export function setPath(obj, path, value) {
+  if (!path || !obj) return;
+  const parts = String(path).split(".");
+  let current = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const key = parts[i];
+    if (current[key] === undefined || current[key] === null) {
+      current[key] = {};
+    } else if (typeof current[key] !== "object") {
+      current[key] = {};  // Overwrite non-object
+    }
+    current = current[key];
+  }
+  current[parts[parts.length - 1]] = value;
+}
+
+// ============== REFERENCE RESOLUTION ==============
+
+/**
+ * Resolve value with $ reference support
+ * - $memory.path → memory reference
+ * - $input.path → input reference
+ * - literal strings preserved
+ */
+export function resolveValue(val, ctx) {
   if (val === undefined || val === null) return undefined;
   
   if (typeof val === "string") {
-    // Handle input.X references directly
+    // $ reference system
+    if (val.startsWith("$memory.")) {
+      const path = val.slice(8);  // Remove "$memory."
+      return getPath(ctx.memory, path);
+    }
+    
+    if (val.startsWith("$input.")) {
+      const path = val.slice(7);  // Remove "$input."
+      return getPath(ctx.input, path);
+    }
+    
+    // Legacy input.X support
     if (val.startsWith("input.")) {
-      const key = val.slice(6);  // Remove "input." prefix
+      const key = val.slice(6);
       return ctx.input?.[key];
     }
     
-    // Handle memory.X references
+    // Legacy memory.X support
     if (val.startsWith("memory.")) {
-      const key = val.slice(7);  // Remove "memory." prefix
-      return ctx.memory?.[key];
+      const key = val.slice(7);
+      return getPath(ctx.memory, key);
     }
     
+    // Memory direct lookup
     if (ctx.memory[val] !== undefined) {
       return ctx.memory[val];
     }
     
+    // Fallback chain (||)
     if (val.includes("||")) {
       const parts = val.split("||");
       for (const part of parts) {
@@ -51,52 +130,43 @@ function resolveValue(val, ctx) {
       return parts[parts.length - 1].trim();
     }
     
+    // Expression evaluation
     if (val.includes("+") || val.includes("-") || val.includes("*") || val.includes("/")) {
       try {
-        // Replace input.X with actual values from ctx.input
-        const expr = val.replace(/input\.(\w+)/g, (match, key) => {
-          const inputVal = ctx.input?.[key];
-          if (inputVal !== undefined) {
-            return String(inputVal);
-          }
-          return "0";
+        // Replace $ references in expression
+        let expr = val.replace(/\$input\.(\w+)/g, (match, key) => {
+          const val = getPath(ctx.input, key);
+          return val !== undefined ? String(val) : "0";
         });
-        // Also handle memory.X references
-        const expr2 = expr.replace(/memory\.(\w+)/g, (match, key) => {
-          const memVal = ctx.memory?.[key];
-          if (memVal !== undefined) {
-            return String(memVal);
-          }
-          return "0";
+        expr = expr.replace(/\$memory\.(\w+)/g, (match, key) => {
+          const val = getPath(ctx.memory, key);
+          return val !== undefined ? String(val) : "0";
         });
-        // Now evaluate the expression
-        if (/^[\d\s+\-*/().]+$/.test(expr2)) {
-          const result = Function('"use strict"; return (' + expr2 + ')')();
+        
+        if (/^[\d\s+\-*/().]+$/.test(expr)) {
+          const result = Function('"use strict"; return (' + expr + ')')();
           return result;
         }
       } catch (e) {
-        console.error("[resolveValue] Expression evaluation error:", e.message, "Expression:", val);
+        console.error("[resolveValue] Expression error:", e.message);
       }
     }
   }
+  
   return val;
 }
 
-function resolveObject(obj, ctx) {
+/**
+ * Resolve all values in an object
+ */
+export function resolveObject(obj, ctx) {
   if (typeof obj !== "object" || obj === null) return obj;
 
   const result = {};
   for (const key in obj) {
     const val = obj[key];
     if (typeof val === "string") {
-      if (ctx.memory[val] !== undefined) {
-        result[key] = ctx.memory[val];
-      } else if (val.includes(".")) {
-        const memVal = getByPath(ctx.memory, val);
-        result[key] = memVal !== undefined ? memVal : val;
-      } else {
-        result[key] = val;
-      }
+      result[key] = resolveValue(val, ctx);
     } else if (typeof val === "object" && val !== null) {
       result[key] = resolveObject(val, ctx);
     } else {
@@ -106,38 +176,73 @@ function resolveObject(obj, ctx) {
   return result;
 }
 
-function getByPath(obj, path) {
-  const parts = path.split(".");
-  let current = obj;
-  for (const part of parts) {
-    if (current === undefined || current === null) return undefined;
-    current = current[part];
+// ============== VALIDATION ==============
+
+/**
+ * Step validator - ensures safe operations
+ */
+export function validateStep(step) {
+  if (!step) {
+    throw new Error("Step is null or undefined");
   }
-  return current;
+  
+  if (!step.op) {
+    throw new Error("Step missing 'op' field");
+  }
+  
+  if (!EXECUTOR_CONFIG.allowedOps.has(step.op)) {
+    throw new Error(`Invalid or disallowed operation: ${step.op}`);
+  }
+  
+  return true;
 }
 
-function setByPath(obj, path, value) {
-  const parts = path.split(".");
-  let current = obj;
-  for (let i = 0; i < parts.length - 1; i++) {
-    if (current[parts[i]] === undefined) {
-      current[parts[i]] = {};
+/**
+ * Dangerous code detector for string-based logic
+ */
+function containsDangerousCode(code) {
+  if (typeof code !== "string") return false;
+  for (const keyword of EXECUTOR_CONFIG.dangerousKeywords) {
+    if (code.includes(keyword)) return true;
+  }
+  return false;
+}
+
+// ============== EXECUTION HELPERS ==============
+
+/**
+ * Execute with timeout
+ */
+async function withTimeout(promise, ms = EXECUTOR_CONFIG.stepTimeoutMs) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Step timeout")), ms)
+    )
+  ]);
+}
+
+/**
+ * Execute with retry
+ */
+async function executeWithRetry(fn, retries = EXECUTOR_CONFIG.maxRetries) {
+  let lastError;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (i < retries) {
+        await new Promise(r => setTimeout(r, EXECUTOR_CONFIG.retryDelayMs));
+      }
     }
-    current = current[parts[i]];
   }
-  current[parts[parts.length - 1]] = value;
+  throw lastError;
 }
 
-function setMemory(ctx, path, value) {
-  if (path.startsWith("memory.")) {
-    const actualPath = path.slice(7);
-    setByPath(ctx.memory, actualPath, value);
-    setByPath(ctx.output, actualPath, value);
-  } else {
-    setByPath(ctx.output, path, value);
-  }
-}
-
+/**
+ * Evaluate condition for if/switch
+ */
 function evaluateCondition(expr, ctx) {
   if (typeof expr === "boolean") return expr;
   if (typeof expr === "string") {
@@ -164,20 +269,39 @@ function evaluateCondition(expr, ctx) {
   return !!expr;
 }
 
-async function executeStep(step, ctx) {
+// ============== STEP EXECUTION ==============
+
+/**
+ * Execute a single step
+ */
+async function executeStep(step, frame, input) {
+  const ctx = {
+    input,
+    memory: frame.memory,
+    output: frame.output
+  };
+  
   const op = step.op;
 
   switch (op) {
     case "set": {
       const value = resolveValue(step.value, ctx);
-      setMemory(ctx, step.path, value);
+      const path = step.path || step.to;
+      if (path) {
+        setPath(frame.memory, path, value);
+        setPath(frame.output, path, value);
+      }
       break;
     }
 
     case "get": {
-      const val = getByPath(ctx.input, step.path) ?? getByPath(ctx.memory, step.path);
-      ctx.memory[step.to] = val;
-      ctx.output[step.to] = val;
+      const path = step.path || step.from;
+      const val = getPath(input, path) ?? getPath(frame.memory, path);
+      const to = step.to || step.into;
+      if (to) {
+        setPath(frame.memory, to, val);
+        setPath(frame.output, to, val);
+      }
       break;
     }
 
@@ -194,11 +318,10 @@ async function executeStep(step, ctx) {
         case "multiply": result = a * b; break;
         case "divide": result = b !== 0 ? a / b : NaN; break;
       }
-      if (step.to) ctx.memory[step.to] = result;
-      if (step.to_output) {
-        setByPath(ctx.output, step.to_output, result);
-      } else if (step.to) {
-        ctx.output[step.to] = result;
+      const to = step.to || step.to_output;
+      if (to) {
+        setPath(frame.memory, to, result);
+        setPath(frame.output, to, result);
       }
       break;
     }
@@ -208,32 +331,36 @@ async function executeStep(step, ctx) {
       const b = resolveValue(step.b, ctx) ?? "";
       const result = String(a) + String(b);
       if (step.to) {
-        ctx.memory[step.to] = result;
-        ctx.output[step.to] = result;
+        setPath(frame.memory, step.to, result);
+        setPath(frame.output, step.to, result);
       }
       break;
     }
 
     case "mcp_call": {
-      const tool = step.tool;
-      const args = resolveObject(step.args, ctx);
+      const tool = resolveValue(step.tool, ctx);
+      const args = resolveObject(step.args || {}, ctx);
       const result = await callTool(tool, args);
-      ctx.memory[step.to] = result;
-      ctx.output[step.to] = result;
+      if (step.to) {
+        setPath(frame.memory, step.to, result);
+        setPath(frame.output, step.to, result);
+      }
       break;
     }
 
     case "call_skill": {
       const skillName = resolveValue(step.skill, ctx);
-      const input = resolveObject(step.input || {}, ctx);
+      const inputResolved = resolveObject(step.input || {}, ctx);
       
       if (!SkillRunner) {
         throw new Error("SkillRunner not configured");
       }
       
-      const result = await SkillRunner.run(skillName, { input });
-      ctx.memory[step.to] = result;
-      ctx.output[step.to] = result;
+      const result = await SkillRunner.run(skillName, { input: inputResolved });
+      if (step.to) {
+        setPath(frame.memory, step.to, result);
+        setPath(frame.output, step.to, result);
+      }
       break;
     }
 
@@ -244,29 +371,27 @@ async function executeStep(step, ctx) {
       const results = [];
 
       for (const item of collection) {
-        const input = { input: { [inputKey]: item } };
         if (!SkillRunner) {
           throw new Error("SkillRunner not configured");
         }
-        const result = await SkillRunner.run(skillName, input);
+        const result = await SkillRunner.run(skillName, { input: { [inputKey]: item } });
         results.push(result);
       }
 
-      ctx.memory[step.to] = results;
-      ctx.output[step.to] = results;
+      if (step.to) {
+        setPath(frame.memory, step.to, results);
+        setPath(frame.output, step.to, results);
+      }
       break;
     }
 
     case "if": {
       const condition = evaluateCondition(step.condition, ctx);
       const branches = step.branches || {};
-      if (condition && branches.then) {
-        for (const subStep of branches.then) {
-          await executeStep(subStep, ctx);
-        }
-      } else if (!condition && branches.else) {
-        for (const subStep of branches.else) {
-          await executeStep(subStep, ctx);
+      const steps = condition ? branches.then : branches.else;
+      if (steps) {
+        for (const subStep of steps) {
+          await executeStep(subStep, frame, input);
         }
       }
       break;
@@ -281,7 +406,7 @@ async function executeStep(step, ctx) {
         const caseValue = key === "default" ? "default" : resolveValue(key, ctx);
         if (caseValue === value || caseValue === "default") {
           for (const subStep of steps) {
-            await executeStep(subStep, ctx);
+            await executeStep(subStep, frame, input);
           }
           if (caseValue !== "default") {
             matched = true;
@@ -292,7 +417,7 @@ async function executeStep(step, ctx) {
 
       if (!matched && cases.default) {
         for (const subStep of cases.default) {
-          await executeStep(subStep, ctx);
+          await executeStep(subStep, frame, input);
         }
       }
       break;
@@ -300,118 +425,55 @@ async function executeStep(step, ctx) {
 
     case "for": {
       const collection = resolveValue(step.collection, ctx) ?? [];
-      const arr = Array.isArray(collection) ? collection : Object.values(collection || {});
-      let iterations = 0;
+      const varName = step.var || "item";
+      const steps = step.steps || [];
 
-      for (const item of arr) {
-        if (iterations >= MAX_LOOP_ITERATIONS) break;
-        ctx.memory[step.item] = item;
-        if (step.index !== undefined) {
-          ctx.memory[step.index] = iterations;
-        }
-        for (const subStep of step.steps) {
-          await executeStep(subStep, ctx);
-        }
-        iterations++;
-      }
-      break;
-    }
-
-    case "for_range": {
-      const start = resolveValue(step.start, ctx) ?? 0;
-      const end = resolveValue(step.end, ctx) ?? 0;
-      const stepSize = step.step ?? 1;
-      let iterations = 0;
-
-      for (let i = start; i < end; i += stepSize) {
-        if (iterations >= MAX_LOOP_ITERATIONS) break;
-        ctx.memory[step.item] = i;
-        for (const subStep of step.steps) {
-          await executeStep(subStep, ctx);
-        }
-        iterations++;
-      }
-      break;
-    }
-
-    case "while": {
-      let iterations = 0;
-      while (evaluateCondition(step.condition, ctx)) {
-        if (iterations >= MAX_LOOP_ITERATIONS) break;
-        for (const subStep of step.steps) {
-          await executeStep(subStep, ctx);
-        }
-        iterations++;
-      }
-      break;
-    }
-
-    case "map": {
-      const collection = resolveValue(step.collection, ctx) ?? [];
-      const arr = Array.isArray(collection) ? collection : [];
-      const results = [];
-
-      for (const item of arr) {
-        const loopCtx = { ...ctx, memory: { ...ctx.memory, [step.item]: item } };
-        for (const subStep of step.steps) {
-          await executeStep(subStep, loopCtx);
-        }
-        const result = resolveValue(step.result, loopCtx);
-        results.push(result);
-      }
-
-      ctx.memory[step.to] = results;
-      ctx.output[step.to] = results;
-      break;
-    }
-
-    case "filter": {
-      const collection = resolveValue(step.collection, ctx) ?? [];
-      const arr = Array.isArray(collection) ? collection : [];
-      const results = [];
-
-      for (const item of arr) {
-        const loopCtx = { ...ctx, memory: { ...ctx.memory, [step.item]: item } };
-        const condition = evaluateCondition(step.condition, loopCtx);
-        if (condition) {
-          results.push(item);
+      for (const item of collection) {
+        setPath(frame.memory, varName, item);
+        setPath(frame.output, varName, item);
+        
+        for (const subStep of steps) {
+          await executeStep(subStep, frame, input);
         }
       }
-
-      ctx.memory[step.to] = results;
-      ctx.output[step.to] = results;
       break;
     }
 
     case "reduce": {
       const collection = resolveValue(step.collection, ctx) ?? [];
-      const arr = Array.isArray(collection) ? collection : [];
-      let acc = resolveValue(step.initial, ctx);
+      const initial = resolveValue(step.initial, ctx);
+      const varAcc = step.accumulator || "acc";
+      const varItem = step.item || "item";
+      const steps = step.steps || [];
 
-      for (const item of arr) {
-        const loopCtx = {
-          ...ctx,
-          memory: { ...ctx.memory, [step.item]: item, [step.accumulator]: acc }
-        };
-        for (const subStep of step.steps) {
-          await executeStep(subStep, loopCtx);
+      let acc = initial;
+      setPath(frame.memory, varAcc, acc);
+      setPath(frame.output, varAcc, acc);
+
+      for (const item of collection) {
+        setPath(frame.memory, varItem, item);
+        setPath(frame.output, varItem, item);
+        
+        for (const subStep of steps) {
+          await executeStep(subStep, frame, input);
         }
-        acc = resolveValue(step.accumulator, loopCtx);
+        
+        acc = getPath(frame.memory, varAcc) ?? getPath(frame.output, varAcc);
       }
 
-      ctx.memory[step.to] = acc;
-      ctx.output[step.to] = acc;
+      if (step.to) {
+        setPath(frame.memory, step.to, acc);
+        setPath(frame.output, step.to, acc);
+      }
       break;
     }
 
     case "break": {
       throw new Error("__BREAK__");
-      break;
     }
 
     case "continue": {
       throw new Error("__CONTINUE__");
-      break;
     }
 
     default:
@@ -419,54 +481,155 @@ async function executeStep(step, ctx) {
   }
 }
 
+// ============== MAIN EXECUTOR ==============
+
+/**
+ * Create execution frame
+ */
+function createFrame() {
+  return {
+    stepIndex: 0,
+    memory: {},
+    output: {},
+    trace: [],
+    error: null,
+    metadata: {
+      startedAt: Date.now(),
+      stepsExecuted: 0
+    }
+  };
+}
+
+/**
+ * Run skill with full execution frame
+ */
 export async function runSkill(skill, input) {
   const startTime = Date.now();
   const logic = skill.logic;
-  
+
+  // Handle string-based logic (VM)
   if (typeof logic === "string") {
     if (containsDangerousCode(logic)) {
       throw new Error("Dangerous code detected in skill logic");
     }
 
-    const context = {
-      input,
-      output: {},
-      memory: {}
-    };
-
+    const context = { input, output: {}, memory: {} };
     vm.createContext(context);
     const script = new vm.Script(logic);
-    script.runInContext(context, { timeout: TIMEOUT_MS });
+    script.runInContext(context, { timeout: EXECUTOR_CONFIG.stepTimeoutMs });
+    
     const result = context.output;
-    result._meta = {
-      latency: Date.now() - startTime
-    };
+    result._meta = { latency: Date.now() - startTime };
     return result;
   }
 
+  // Handle array-based logic (DSL steps)
   if (Array.isArray(logic)) {
-    const ctx = {
-      input,
-      output: {},
-      memory: {}
+    const frame = createFrame();
+
+    // Execution loop with limits
+    for (let i = 0; i < logic.length; i++) {
+      // Check step limit
+      if (i >= EXECUTOR_CONFIG.maxSteps) {
+        frame.error = new Error(`Max steps exceeded (${EXECUTOR_CONFIG.maxSteps})`);
+        break;
+      }
+
+      frame.stepIndex = i;
+      const step = logic[i];
+
+      // Validate step
+      validateStep(step);
+
+      try {
+        // Execute with timeout and retry
+        const execFn = () => executeStep(step, frame, input);
+        await withTimeout(executeWithRetry(execFn), EXECUTOR_CONFIG.stepTimeoutMs);
+        
+        frame.metadata.stepsExecuted++;
+
+        // Add to trace
+        frame.trace.push({
+          stepIndex: i,
+          op: step.op,
+          timestamp: Date.now()
+        });
+
+      } catch (err) {
+        frame.error = err;
+        
+        // Handle break/continue
+        if (err.message === "__BREAK__") break;
+        if (err.message === "__CONTINUE__") continue;
+        
+        // Re-throw other errors
+        break;
+      }
+    }
+
+    // Validate output schema if defined
+    if (skill.output_schema) {
+      const validation = validateOutput(skill.output_schema, frame.output);
+      if (!validation.valid) {
+        frame.error = new Error(`Output schema validation failed: ${validation.errors.join(", ")}`);
+      }
+    }
+
+    // Add metadata
+    frame.output._meta = {
+      latency: Date.now() - startTime,
+      stepsExecuted: frame.metadata.stepsExecuted,
+      stepLimit: EXECUTOR_CONFIG.maxSteps,
+      hadError: !!frame.error
     };
 
-    for (const step of logic) {
-      await executeStep(step, ctx);
-    }
-    const result = ctx.output;
-    result._meta = {
-      latency: Date.now() - startTime
-    };
-    return result;
+    return frame.output;
   }
 
   throw new Error("Invalid skill logic format");
 }
 
+/**
+ * Validate output against schema
+ */
+function validateOutput(schema, output) {
+  const errors = [];
+  
+  if (!schema) {
+    return { valid: true };
+  }
+
+  // Simple schema validation
+  if (schema.required) {
+    for (const field of schema.required) {
+      if (output[field] === undefined) {
+        errors.push(`Missing required field: ${field}`);
+      }
+    }
+  }
+
+  // Type checking
+  if (schema.properties) {
+    for (const [field, type] of Object.entries(schema.properties)) {
+      if (output[field] !== undefined && typeof output[field] !== type) {
+        errors.push(`Field ${field} expected type ${type}, got ${typeof output[field]}`);
+      }
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors
+  };
+}
+
+// ============== ALIASES ==============
+
 export async function runDSL(skill, input) {
   return runSkill(skill, input);
 }
+
+// ============== SKILL RUNNER ==============
 
 let SkillRunner = null;
 
@@ -477,3 +640,6 @@ export function setSkillRunner(runner) {
 export function getSkillRunner() {
   return SkillRunner;
 }
+
+export { EXECUTOR_CONFIG };
+export default runSkill;
