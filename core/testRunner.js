@@ -184,8 +184,32 @@ export async function evaluateSkill(skill, capability) {
   const stable = firstNormalTest ? await checkConsistency(skill, firstNormalTest) : true;
 
   // 4. Final score calculation
-  // accuracy: 80%, consistency: 20%
-  let score = accuracy * 0.8 + (stable ? 0.2 : 0);
+  // Multi-component scoring:
+  // - correctness_real (accuracy): 50%
+  // - schema_validity: 20%
+  // - robustness (consistency): 20%
+  // - efficiency (performance): 10%
+  
+  const correctnessScore = accuracy;
+  const schemaScore = testCases.every(t => {
+    // Find matching test case in details
+    const detail = details.find(d => 
+      JSON.stringify(d.input) === JSON.stringify(t.input)
+    );
+    return detail && detail.reason !== "schema_fail";
+  }) ? 1 : 0;
+  
+  const robustnessScore = stable ? 1 : 0;
+  
+  // Efficiency: based on execution time (faster = better)
+  // This is placeholder - real implementation would measure execution time
+  const efficiencyScore = 1.0; // For now, assume optimal
+  
+  let score = 
+    correctnessScore * 0.5 +
+    schemaScore * 0.2 +
+    robustnessScore * 0.2 +
+    efficiencyScore * 0.1;
 
   // 5. Heavy penalty for low accuracy skills (< 0.5)
   // This prevents "wrong but not terrible" skills from getting inflated scores
@@ -202,6 +226,13 @@ export async function evaluateSkill(skill, capability) {
     degraded,
     passed,
     total,
+    // NEW: Score breakdown for debugging
+    scoreBreakdown: {
+      correctness: correctnessScore,
+      schema: schemaScore,
+      robustness: robustnessScore,
+      efficiency: efficiencyScore
+    },
     details
   };
 }

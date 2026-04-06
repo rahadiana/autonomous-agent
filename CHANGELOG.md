@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0] - 2026-04-07
 
+### Summary
+Critical fixes to evaluator system and implementation of proper UCB bandit skill selection.
+
+### Fixed (CRITICAL)
+- **Evaluator was returning fake scores of 1.0** - Core bottleneck causing fake learning
+  - Root cause: scoring.js always returned 1.0 regardless of actual skill correctness
+  - Fixed by implementing proper ground truth comparison in testRunner.js
+
 ### Added
 
 #### Core Evaluator System

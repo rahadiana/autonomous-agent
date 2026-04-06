@@ -101,3 +101,174 @@ export function getEdgeCases(capability) {
   const cases = groundTruth[capability] || [];
   return cases.filter(c => c.expected === null);
 }
+
+/**
+ * Generate random test cases for a capability
+ * Used for adversarial testing and discovering edge cases
+ * 
+ * @param {string} capability - e.g., "math.add"
+ * @param {number} count - Number of random cases to generate
+ * @returns {Array} Array of random test cases
+ */
+export function generateRandomTestCases(capability, count = 5) {
+  const cases = [];
+  
+  for (let i = 0; i < count; i++) {
+    const testCase = generateRandomCase(capability);
+    if (testCase) {
+      cases.push(testCase);
+    }
+  }
+  
+  return cases;
+}
+
+/**
+ * Generate a single random test case based on capability type
+ */
+function generateRandomCase(capability) {
+  // Generate random numbers in various ranges
+  const ranges = [
+    // Small integers
+    { min: -100, max: 100 },
+    // Large integers  
+    { min: -1e6, max: 1e6 },
+    // Small decimals
+    { min: -10, max: 10, decimals: true },
+    // Edge values
+    { min: Number.MIN_SAFE_INTEGER, max: Number.MAX_SAFE_INTEGER }
+  ];
+  
+  const range = ranges[Math.floor(Math.random() * ranges.length)];
+  const a = randomInRange(range);
+  const b = randomInRange(range);
+  
+  // Calculate expected result based on capability
+  let expected = null;
+  let input = { a, b };
+  
+  if (capability === "math.add") {
+    expected = { result: a + b };
+  } else if (capability === "math.multiply") {
+    expected = { result: a * b };
+  } else if (capability === "math.subtract") {
+    expected = { result: a - b };
+  } else if (capability === "math.divide") {
+    if (b === 0) {
+      // Division by zero - expect error handling
+      expected = null;
+    } else {
+      expected = { result: a / b };
+    }
+  }
+  
+  // 10% chance of edge case (null or invalid input)
+  if (Math.random() < 0.1) {
+    const edgeTypes = [
+      { a: null, b: Math.floor(Math.random() * 10) },
+      { a: Math.floor(Math.random() * 10), b: null },
+      { a: "string", b: Math.floor(Math.random() * 10) },
+      { a: Math.floor(Math.random() * 10), b: "string" },
+      { a: undefined, b: Math.floor(Math.random() * 10) },
+      { a: {}, b: Math.floor(Math.random() * 10) },
+      { a: [], b: Math.floor(Math.random() * 10) }
+    ];
+    const edge = edgeTypes[Math.floor(Math.random() * edgeTypes.length)];
+    input = edge;
+    expected = null; // Edge cases expect null (error handling)
+  }
+  
+  return { input, expected };
+}
+
+function randomInRange(range) {
+  if (range.decimals) {
+    return Math.round((Math.random() * (range.max - range.min) + range.min) * 100) / 100;
+  }
+  return Math.floor(Math.random() * (range.max - range.min + 1)) + range.min;
+}
+
+/**
+ * Generate edge case test cases (null, empty, extreme values)
+ * 
+ * @param {string} capability
+ * @returns {Array} Array of edge case test cases
+ */
+export function generateEdgeCases(capability) {
+  const edgeCases = [
+    // Null inputs
+    { input: { a: null, b: null }, expected: null },
+    { input: { a: null, b: 5 }, expected: null },
+    { input: { a: 5, b: null }, expected: null },
+    
+    // Undefined inputs
+    { input: { a: undefined, b: 5 }, expected: null },
+    { input: { a: 5, b: undefined }, expected: null },
+    
+    // Empty values
+    { input: { a: "", b: 5 }, expected: null },
+    { input: { a: 5, b: "" }, expected: null },
+    
+    // Extreme values
+    { input: { a: Number.MAX_VALUE, b: 2 }, expected: null }, // Overflow
+    { input: { a: Number.MIN_VALUE, b: 2 }, expected: null }, // Underflow
+    { input: { a: Number.MAX_SAFE_INTEGER, b: 2 }, expected: null },
+    
+    // NaN
+    { input: { a: NaN, b: 5 }, expected: null },
+    { input: { a: 5, b: NaN }, expected: null },
+    
+    // Infinity
+    { input: { a: Infinity, b: 5 }, expected: null },
+    { input: { a: 5, b: Infinity }, expected: null },
+    { input: { a: -Infinity, b: 5 }, expected: null },
+    
+    // Objects and arrays (wrong types)
+    { input: { a: {}, b: 5 }, expected: null },
+    { input: { a: [], b: 5 }, expected: null },
+    { input: { a: { x: 1 }, b: 5 }, expected: null },
+    
+    // Special characters
+    { input: { a: "NaN", b: 5 }, expected: null },
+    { input: { a: "Infinity", b: 5 }, expected: null },
+    { input: { a: "true", b: 5 }, expected: null },
+    { input: { a: "false", b: 5 }, expected: null }
+  ];
+  
+  // Filter based on capability
+  if (capability === "math.divide") {
+    // Add division-specific edge cases
+    edgeCases.push(
+      { input: { a: 10, b: 0 }, expected: null }, // Division by zero
+      { input: { a: 0, b: 0 }, expected: null }    // 0/0 = NaN
+    );
+  }
+  
+  return edgeCases;
+}
+
+/**
+ * Get all test cases including generated ones
+ * Combines static ground truth with random + edge cases
+ * 
+ * @param {string} capability
+ * @param options - { includeRandom: boolean, includeEdge: boolean }
+ * @returns {Array} Combined test cases
+ */
+export function getAllTestCases(capability, options = {}) {
+  const { includeRandom = false, includeEdge = false } = options;
+  
+  let cases = [...groundTruth[capability] || []];
+  
+  if (includeRandom) {
+    const randomCases = generateRandomTestCases(capability, 3);
+    cases = [...cases, ...randomCases];
+  }
+  
+  if (includeEdge) {
+    const edgeCases = generateEdgeCases(capability);
+    cases = [...cases, ...edgeCases];
+  }
+  
+  return cases;
+}
