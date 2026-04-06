@@ -406,6 +406,7 @@ async function executeStep(step, ctx) {
 }
 
 export async function runSkill(skill, input) {
+  const startTime = Date.now();
   const logic = skill.logic;
   
   if (typeof logic === "string") {
@@ -422,7 +423,11 @@ export async function runSkill(skill, input) {
     vm.createContext(context);
     const script = new vm.Script(logic);
     script.runInContext(context, { timeout: TIMEOUT_MS });
-    return context.output;
+    const result = context.output;
+    result._meta = {
+      latency: Date.now() - startTime
+    };
+    return result;
   }
 
   if (Array.isArray(logic)) {
@@ -435,8 +440,11 @@ export async function runSkill(skill, input) {
     for (const step of logic) {
       await executeStep(step, ctx);
     }
-
-    return ctx.output;
+    const result = ctx.output;
+    result._meta = {
+      latency: Date.now() - startTime
+    };
+    return result;
   }
 
   throw new Error("Invalid skill logic format");

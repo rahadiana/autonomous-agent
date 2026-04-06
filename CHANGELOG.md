@@ -51,6 +51,47 @@ NEEDED (End-to-End):
 
 ---
 
+## [1.1.0] - 2026-04-07
+
+### Summary
+Implemented multi-level evaluation layer with step/plan/goal evaluation + plan validation.
+
+### Added
+
+#### Evaluation Layer (NEW)
+- **`core/evaluation.js`** - Multi-level evaluation system
+  - `evaluateStep()` - Low-level step evaluation (correctness, latency, cost)
+  - `evaluatePlan()` - Mid-level plan evaluation (success rate, failed steps)
+  - `evaluateGoal()` - High-level end-to-end goal evaluation
+  - `computeFinalScore()` - Combines goal + plan scores (70% goal, 30% plan)
+  - `validatePlan()` - Validates plan capabilities against registry
+  
+- **Score composition:**
+  ```javascript
+  goalScore = correctness(60%) + latency(20%) + cost(10%) + efficiency(10%)
+  finalScore = goalScore * 0.7 + planSuccessRate * 0.3
+  ```
+
+#### Executor Latency Tracking (NEW)
+- **`core/executor.js`** - Added `_meta.latency` to all skill outputs
+  - Measures execution time for each skill
+  - Used by evaluation layer for latency penalty
+
+#### Plan Validation (NEW)
+- **`core/coordinator.js`** - Added `validatePlan()` check before execution
+  - Validates all step capabilities exist in registry
+  - Prevents planner hallucination
+  - Added `getSkillRegistry()` method for capability lookup
+
+### Changed
+- **`core/coordinator.js`** - Integrated validation before execution
+- Updated import to include evaluation.js
+
+### Fixed
+- Executor now returns latency metadata for scoring
+
+---
+
 ## [1.0.0] - 2026-04-07
 
 ### Summary

@@ -9,6 +9,7 @@ import { MetaReasoningLayer } from "./metaReasoning.js";
 import { RealCostTracker, ExecutionBudgetController, WorkerPool, ObservabilityLayer } from "./production.js";
 import { ResilienceLayer } from "./resilience.js";
 import { OperationalLayer } from "./operational.js";
+import { validatePlan } from "./evaluation.js";
 
 export function classifyGoalCapability(goal) {
   if (!goal || typeof goal !== "string") return null;
@@ -87,6 +88,17 @@ export class AgentCoordinator {
     this.skills.push(skill);
   }
 
+  /**
+   * Get skill registry as Map for validation
+   */
+  getSkillRegistry() {
+    const registry = new Map();
+    for (const skill of this.skills) {
+      registry.set(skill.capability, skill);
+    }
+    return registry;
+  }
+
   registerAgent(name, agent, type, handler) {
     this.agents.set(name, { agent, type, handler });
   }
@@ -117,6 +129,19 @@ export class AgentCoordinator {
         lastResult = { success: false, error: "No plan generated" };
         break;
       }
+      
+      // NEW: Validate plan capabilities before execution
+      const registry = this.getSkillRegistry();
+      const planValidation = validatePlan(planningResult.plan, registry);
+      if (!planValidation.valid) {
+        console.log("[Planning] Invalid plan capabilities:", planValidation.invalidSteps.map(s => s.reason));
+        // Force new search if plan has invalid capabilities
+        if (!planningResult.reused) {
+          lastResult = { success: false, error: "Plan has invalid capabilities" };
+          break;
+        }
+      }
+      
       if (expectedCapability && !validateCapabilityMatch(planningResult.plan, expectedCapability)) {
         console.log(`[Planning] Capability mismatch - rejecting template, expected: ${expectedCapability}`);
         planningResult = await this.executePlanning({ goal: { goal, context, startTime: Date.now() }, context, skills: this.skills, iteration, forceSearch: true });
