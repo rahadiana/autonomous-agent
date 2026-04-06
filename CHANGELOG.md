@@ -53,6 +53,35 @@ NEEDED (End-to-End):
 
 ---
 
+## [1.3.0] - 2026-04-07
+
+### Summary
+Added task-aware test suite evaluation with thresholds and test case categorization.
+
+### Added
+
+#### Real Evaluation System (ENHANCED)
+- **`core/evaluation.js`** - Extended with thresholds and test suite evaluation
+  - `EVAL_THRESHOLDS` - Constants: REJECT (<0.6), ACCEPT (>=0.8), MIN_TESTS (3)
+  - `TestCaseType` - VALID, EDGE, INVALID categories
+  - `evaluateTestSuite()` - Runs full test suite with pass/fail decision
+  - Returns: { score, passed, failed, total, decision, reason, details }
+
+#### Test Case Categorization (NEW)
+- **`core/groundTruth.js`** - Added type and taskType to each test case
+  - `type`: "valid" | "edge" | "invalid"
+  - `taskType`: "exact" | "numeric" | "partial" | "boolean"
+  - All capabilities now have proper test case distribution
+
+### Decision Logic
+```javascript
+if (score < 0.6)  → reject    // skill not good enough
+if (score >= 0.8) → accept    // skill is good
+else              → needs_refinement
+```
+
+---
+
 ## [1.2.0] - 2026-04-07
 
 ### Summary

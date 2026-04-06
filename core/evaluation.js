@@ -7,11 +7,33 @@
  * - goalEvaluator: evaluates end-to-end goal
  * - computeFinalScore: combines all scores
  * - evaluateTask: task-aware evaluation (exact, numeric, partial)
+ * - evaluateTestSuite: evaluates full test suite with pass/fail thresholds
  */
 
 import { getTestCases } from "./groundTruth.js";
 
 const TOLERANCE = 1e-9;
+
+/**
+ * Evaluation thresholds
+ * - score < ACCEPT_THRESHOLD: reject (skill not good enough)
+ * - score > PASS_THRESHOLD: accept (skill is good)
+ * - score between: need more testing or refinement
+ */
+export const EVAL_THRESHOLDS = {
+  REJECT: 0.6,    // Below this: reject skill
+  ACCEPT: 0.8,   // Above this: accept skill
+  MIN_TESTS: 3   // Minimum tests required for valid evaluation
+};
+
+/**
+ * Test case types for evaluation
+ */
+export const TestCaseType = {
+  VALID: "valid",     // Normal valid input
+  EDGE: "edge",       // Edge case (0, negative, large numbers)
+  INVALID: "invalid"  // Invalid input (null, wrong type)
+};
 
 /**
  * Task types for evaluation
@@ -51,6 +73,84 @@ export function evaluateTask(result, expected, taskType = TaskType.EXACT) {
     default:
       return deepEqual(result, expected) ? 1 : 0;
   }
+}
+
+/**
+ * Evaluate a full test suite
+ * Runs all tests and calculates final score with pass/fail decision
+ * 
+ * @param {Array} testCases - Array of test cases with input, expected, type
+ * @param {Function} runFn - Function to execute skill and get result
+ * @returns {Object} { score, passed, failed, total, decision, details }
+ */
+export async function evaluateTestSuite(testCases, runFn) {
+  if (!testCases || testCases.length < EVAL_THRESHOLDS.MIN_TESTS) {
+    return {
+      score: 0,
+      passed: 0,
+      failed: 0,
+      total: 0,
+      decision: "reject",
+      reason: `insufficient_tests`,
+      details: []
+    };
+  }
+  
+  let passed = 0;
+  let failed = 0;
+  const details = [];
+  
+  for (const test of testCases) {
+    try {
+      const result = await runFn(test.input);
+      const score = evaluateTask(result, test.expected, test.taskType || TaskType.EXACT);
+      
+      if (score >= 0.5) {
+        passed++;
+        details.push({ ...test, score, passed: true });
+      } else {
+        failed++;
+        details.push({ ...test, score, passed: false });
+      }
+    } catch (error) {
+      // If test expects error (expected: null), error is acceptable
+      if (test.expected === null) {
+        passed++;
+        details.push({ ...test, score: 1, passed: true, error: error.message });
+      } else {
+        failed++;
+        details.push({ ...test, score: 0, passed: false, error: error.message });
+      }
+    }
+  }
+  
+  const total = testCases.length;
+  const score = total > 0 ? passed / total : 0;
+  
+  // Determine decision based on thresholds
+  let decision = "pending";
+  let reason = "";
+  
+  if (score < EVAL_THRESHOLDS.REJECT) {
+    decision = "reject";
+    reason = `score_below_threshold`;
+  } else if (score >= EVAL_THRESHOLDS.ACCEPT) {
+    decision = "accept";
+    reason = `score_above_threshold`;
+  } else {
+    decision = "needs_refinement";
+    reason = `score_between_thresholds`;
+  }
+  
+  return {
+    score,
+    passed,
+    failed,
+    total,
+    decision,
+    reason,
+    details
+  };
 }
 
 /**

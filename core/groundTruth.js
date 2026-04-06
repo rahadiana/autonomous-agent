@@ -1,75 +1,85 @@
 /**
  * Ground truth test cases for math capabilities
  * Used by evaluator to determine if skill is correct or not
+ * 
+ * Test case structure:
+ * - type: "valid" | "edge" | "invalid"
+ * - taskType: "exact" | "numeric" | "partial" | "boolean"
  */
+
+export const TestCaseType = {
+  VALID: "valid",     // Normal valid input
+  EDGE: "edge",       // Edge case (0, negative, large numbers)
+  INVALID: "invalid"  // Invalid input (null, wrong type)
+};
 
 export const groundTruth = {
   "math.add": [
-    // Normal cases
-    { input: { a: 5, b: 3 }, expected: { result: 8 } },
-    { input: { a: 0, b: 10 }, expected: { result: 10 } },
-    { input: { a: 100, b: 200 }, expected: { result: 300 } },
-    { input: { a: 1, b: 1 }, expected: { result: 2 } },
-    // Negative numbers
-    { input: { a: -5, b: 5 }, expected: { result: 0 } },
-    { input: { a: -10, b: -20 }, expected: { result: -30 } },
-    // Edge cases
-    { input: { a: 0, b: 0 }, expected: { result: 0 } },
-    { input: { a: 0.5, b: 0.5 }, expected: { result: 1 } },
-    // Adversarial - large numbers, edge cases
-    { input: { a: 1e9, b: 1e9 }, expected: { result: 2e9 } },
-    { input: { a: 1e-9, b: 1e-9 }, expected: { result: 2e-9 } },
-    { input: { a: 0.1, b: 0.2 }, expected: { result: 0.3 } }, // floating point edge
-    // Error cases - should handle gracefully
-    { input: { a: null, b: 3 }, expected: null },
-    { input: { a: "abc", b: 3 }, expected: null }
+    // Normal cases (VALID)
+    { input: { a: 5, b: 3 }, expected: { result: 8 }, type: "valid", taskType: "exact" },
+    { input: { a: 0, b: 10 }, expected: { result: 10 }, type: "valid", taskType: "exact" },
+    { input: { a: 100, b: 200 }, expected: { result: 300 }, type: "valid", taskType: "exact" },
+    { input: { a: 1, b: 1 }, expected: { result: 2 }, type: "valid", taskType: "exact" },
+    // Negative numbers (VALID)
+    { input: { a: -5, b: 5 }, expected: { result: 0 }, type: "valid", taskType: "numeric" },
+    { input: { a: -10, b: -20 }, expected: { result: -30 }, type: "valid", taskType: "numeric" },
+    // Edge cases (EDGE)
+    { input: { a: 0, b: 0 }, expected: { result: 0 }, type: "edge", taskType: "exact" },
+    { input: { a: 0.5, b: 0.5 }, expected: { result: 1 }, type: "edge", taskType: "numeric" },
+    // Adversarial - large numbers (EDGE)
+    { input: { a: 1e9, b: 1e9 }, expected: { result: 2e9 }, type: "edge", taskType: "numeric" },
+    { input: { a: 1e-9, b: 1e-9 }, expected: { result: 2e-9 }, type: "edge", taskType: "numeric" },
+    { input: { a: 0.1, b: 0.2 }, expected: { result: 0.3 }, type: "edge", taskType: "numeric" },
+    // Error cases (INVALID)
+    { input: { a: null, b: 3 }, expected: null, type: "invalid", taskType: "exact" },
+    { input: { a: "abc", b: 3 }, expected: null, type: "invalid", taskType: "exact" }
   ],
 
   "math.multiply": [
-    // Normal cases
-    { input: { a: 2, b: 3 }, expected: { result: 6 } },
-    { input: { a: 5, b: 4 }, expected: { result: 20 } },
-    { input: { a: 10, b: 10 }, expected: { result: 100 } },
-    // Zero and one
-    { input: { a: 0, b: 100 }, expected: { result: 0 } },
-    { input: { a: 1, b: 999 }, expected: { result: 999 } },
-    // Negative numbers
-    { input: { a: -2, b: 4 }, expected: { result: -8 } },
-    { input: { a: -3, b: -3 }, expected: { result: 9 } },
-    // Edge cases
-    { input: { a: 0, b: 0 }, expected: { result: 0 } },
-    // Adversarial - large numbers, edge cases
-    { input: { a: 1e5, b: 1e5 }, expected: { result: 1e10 } },
-    { input: { a: 1e-5, b: 1e-5 }, expected: { result: 1e-10 } },
-    // Error cases - should handle gracefully
-    { input: { a: null, b: 3 }, expected: null },
-    { input: { a: "abc", b: 2 }, expected: null }
+    // Normal cases (VALID)
+    { input: { a: 2, b: 3 }, expected: { result: 6 }, type: "valid", taskType: "exact" },
+    { input: { a: 5, b: 4 }, expected: { result: 20 }, type: "valid", taskType: "exact" },
+    { input: { a: 10, b: 10 }, expected: { result: 100 }, type: "valid", taskType: "exact" },
+    // Zero and one (EDGE)
+    { input: { a: 0, b: 100 }, expected: { result: 0 }, type: "edge", taskType: "exact" },
+    { input: { a: 1, b: 999 }, expected: { result: 999 }, type: "edge", taskType: "exact" },
+    // Negative numbers (VALID)
+    { input: { a: -2, b: 4 }, expected: { result: -8 }, type: "valid", taskType: "numeric" },
+    { input: { a: -3, b: -3 }, expected: { result: 9 }, type: "valid", taskType: "numeric" },
+    // Edge cases (EDGE)
+    { input: { a: 0, b: 0 }, expected: { result: 0 }, type: "edge", taskType: "exact" },
+    // Adversarial - large numbers (EDGE)
+    { input: { a: 1e5, b: 1e5 }, expected: { result: 1e10 }, type: "edge", taskType: "numeric" },
+    { input: { a: 1e-5, b: 1e-5 }, expected: { result: 1e-10 }, type: "edge", taskType: "numeric" },
+    // Error cases (INVALID)
+    { input: { a: null, b: 3 }, expected: null, type: "invalid", taskType: "exact" },
+    { input: { a: "abc", b: 2 }, expected: null, type: "invalid", taskType: "exact" }
   ],
 
   "math.subtract": [
-    // Normal cases
-    { input: { a: 10, b: 3 }, expected: { result: 7 } },
-    { input: { a: 5, b: 5 }, expected: { result: 0 } },
-    { input: { a: 100, b: 50 }, expected: { result: 50 } },
-    // Negative results
-    { input: { a: 3, b: 10 }, expected: { result: -7 } },
-    // Edge cases
-    { input: { a: 0, b: 0 }, expected: { result: 0 } },
-    // Error cases
-    { input: { a: null, b: 3 }, expected: null },
-    { input: { a: "abc", b: 2 }, expected: null }
+    // Normal cases (VALID)
+    { input: { a: 10, b: 3 }, expected: { result: 7 }, type: "valid", taskType: "exact" },
+    { input: { a: 5, b: 5 }, expected: { result: 0 }, type: "valid", taskType: "exact" },
+    { input: { a: 100, b: 50 }, expected: { result: 50 }, type: "valid", taskType: "exact" },
+    // Negative results (VALID)
+    { input: { a: 3, b: 10 }, expected: { result: -7 }, type: "valid", taskType: "numeric" },
+    // Edge cases (EDGE)
+    { input: { a: 0, b: 0 }, expected: { result: 0 }, type: "edge", taskType: "exact" },
+    // Error cases (INVALID)
+    { input: { a: null, b: 3 }, expected: null, type: "invalid", taskType: "exact" },
+    { input: { a: "abc", b: 2 }, expected: null, type: "invalid", taskType: "exact" }
   ],
 
   "math.divide": [
-    // Normal cases
-    { input: { a: 10, b: 2 }, expected: { result: 5 } },
-    { input: { a: 20, b: 4 }, expected: { result: 5 } },
-    { input: { a: 15, b: 3 }, expected: { result: 5 } },
-    // Edge cases - division by zero should be handled (return NaN or throw)
-    { input: { a: 10, b: 0 }, expected: null }, // Division by zero
-    // Error cases
-    { input: { a: null, b: 3 }, expected: null },
-    { input: { a: "abc", b: 2 }, expected: null }
+    // Normal cases (VALID)
+    { input: { a: 10, b: 2 }, expected: { result: 5 }, type: "valid", taskType: "exact" },
+    { input: { a: 20, b: 4 }, expected: { result: 5 }, type: "valid", taskType: "exact" },
+    { input: { a: 15, b: 3 }, expected: { result: 5 }, type: "valid", taskType: "exact" },
+    // Edge cases - division by zero (EDGE)
+    { input: { a: 10, b: 0 }, expected: null, type: "edge", taskType: "exact" },
+    // Error cases (INVALID)
+    { input: { a: null, b: 3 }, expected: null, type: "invalid", taskType: "exact" },
+    { input: { a: "abc", b: 2 }, expected: null, type: "invalid", taskType: "exact" }
   ]
 };
 
