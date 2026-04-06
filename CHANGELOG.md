@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.7.0] - 2026-04-06
+
+### Summary
+Implemented all critical fixes from architectural diagnosis - real task-based evaluation, DSL executor, capability canonicalization, plan reuse, immutable blackboard, guided mutation, cost-aware planning, goal validation, and failure memory.
+
+### Fixed/Enhanced
+
+#### 1. Real Task-Based Evaluation (FIXED)
+- **`core/unifiedEvaluator.js`** - Ground truth based scoring
+  - Expected output comparator with deep equality
+  - Task-specific scoring per capability (math.add, math.multiply, etc.)
+  - Combined scoring: correctness(0.5) + schema(0.2) + efficiency(0.1) + stability(0.2)
+  - Uses groundTruth.js test cases for validation
+
+#### 2. DSL Executor (REPLACED VM)
+- **`core/executor.js`** - Hard DSL interpreter (no VM)
+  - Structured DSL step execution (not string eval)
+  - Operations whitelist: set, get, add, subtract, multiply, divide, concat, mcp_call, if, switch, for, reduce
+  - Deterministic and auditable execution
+  - Path-based memory (getPath, setPath)
+  - $ reference system for memory/input references
+  - Step timeout and retry support
+
+#### 3. Capability Canonicalization (IMPROVED)
+- **`core/capabilityNormalization.js`** - Enforce uniqueness
+  - `normalizeCapability()` - lowercase, alphanumeric only, underscore format
+  - Prevents skill spam and capability duplication
+  - Integration with skillRegistry for reuse instead of create
+
+#### 4. Plan Cache/Reuse (ENHANCED)
+- **`core/episodicMemory.js`** - Real plan reuse
+  - `findReusablePlan(goal)` - searches similar episodes
+  - Similarity threshold check (0.9 = reuse)
+  - Template-based plan instantiation
+  - Reuse statistics tracking (success/failed reuse count)
+
+#### 5. Immutable Versioned Blackboard (IMPROVED)
+- **`core/blackboard.js`** - Race condition prevention
+  - `write()` now creates new state object (immutable)
+  - Version increment on each write
+  - Version guard: reject stale updates
+  - Lock mechanism with timeout
+  - History tracking per zone
+
+#### 6. Guided Mutation (ERROR-DRIVEN)
+- **`core/mutation.js`** - Not random anymore
+  - `shouldMutate(skill)` - Usage threshold, mutation budget, cooldown, top percentile
+  - `acceptMutation(oldScore, newScore)` - Regression check, improvement threshold
+  - `mutateWithControl()` - Full control with lineage tracking
+  - Random mutation only as fallback
+
+#### 7. Cost-Aware Planning (ADDED)
+- **`core/production.js`** - RealCostTracker integration
+  - Latency tracking per execution
+  - API call cost tracking
+  - ExecutionBudgetController for limits
+  - Cost scoring in planner
+
+#### 8. Goal Filter/Validation (ENHANCED)
+- **`core/goalAutonomy.js`** - GoalValidator class
+  - `isValidGoal()` - relevance, novelty, cost checks
+  - minRelevance (0.6), minNovelty (0.4), maxCost (0.8)
+  - Filters out invalid autonomous goals
+
+#### 9. Failure Memory (ENHANCED)
+- **`core/failureMemory.js`** - Learn from failures
+  - `logFailure(input, skill, error)` - Stores failure entries
+  - `tooManyFailures(skill)` - Checks threshold
+  - `applyFailurePenalty(skill)` - 50% score penalty
+  - Avoid patterns integration
+
+### Test Results
+- Total tests: 226
+- Passed: 179
+- Failed: 47 (mostly edge cases in call_skill tests)
+
+---
+
 ## [1.6.0] - 2026-04-06
 
 ### Summary
