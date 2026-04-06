@@ -23,9 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Issue | Status | Impact |
 |-------|--------|--------|
-| **Global objective function** | ❌ Missing | Evaluator only does skill-level, not end-to-end goal evaluation |
-| **Cost-aware planning** | ⚠️ Partial | CostTracker exists but NOT integrated into plan selection |
-| **Directed mutation** | ❌ | skillService mutation still uses `Math.random()` |
+| **Global objective function** | ✅ Fixed | Multi-level evaluation layer (step/plan/goal) |
+| **Task-aware evaluation** | ✅ Fixed | TaskType + evaluateTask() for exact/numeric/partial |
+| **Plan adaptation** | ✅ Fixed | adaptPlan() for reusing plans with new inputs |
+| **Directed mutation** | ✅ Fixed | shouldMutate() gating + acceptMutation() threshold |
+| **Cost-aware planning** | ⚠️ Partial | Latency tracking, cost scoring - belum terintegrasi penuh |
 | **Blackboard versioning** | ⚠️ | Locking exists, no transaction/versioning |
 
 ### Flow Analysis
@@ -48,6 +50,40 @@ NEEDED (End-to-End):
 2. **Integrate cost/latency** into plan selection
 3. **Directed mutation** - failure-based, not random
 4. **Blackboard transaction** - versioning + rollback
+
+---
+
+## [1.2.0] - 2026-04-07
+
+### Summary
+Added task-aware evaluation, plan adaptation, and mutation control system.
+
+### Added
+
+#### Task-Aware Evaluation (NEW)
+- **`core/evaluation.js`** - Extended with task types
+  - `TaskType` enum: EXACT, NUMERIC, PARTIAL, BOOLEAN
+  - `evaluateTask()` - Task-aware evaluation function
+  - `numericEqual()` - Floating point comparison with tolerance
+  - `partialSimilarity()` - Similarity for complex objects
+
+#### Plan Adaptation (NEW)
+- **`core/episodicMemory.js`** - Added adaptation functions
+  - `adaptPlan()` - Adapts plan to new input by overriding parameters
+  - `extractEpisodeContext()` - Extracts input/output schema for matching
+
+#### Mutation Control (NEW)
+- **`core/mutation.js`** - Complete rewrite with control system
+  - `shouldMutate()` - Gating based on usage, budget, cooldown, percentile
+  - `acceptMutation()` - Only accepts if improvement >= 0.1 threshold
+  - `mutateWithControl()` - Full mutation with lineage tracking
+  - Config: minUsageForMutation=5, improvementThreshold=0.1, maxMutationsPerSkill=3
+
+### Changed
+- Mutation now requires minimum 5 uses before allowed
+- Only top 30% skills by score can be mutated
+- New score must be at least 0.1 better than old to be accepted
+- Rejects mutations that cause regression
 
 ---
 

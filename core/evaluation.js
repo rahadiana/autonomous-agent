@@ -6,11 +6,90 @@
  * - planEvaluator: evaluates plan-level execution  
  * - goalEvaluator: evaluates end-to-end goal
  * - computeFinalScore: combines all scores
+ * - evaluateTask: task-aware evaluation (exact, numeric, partial)
  */
 
 import { getTestCases } from "./groundTruth.js";
 
 const TOLERANCE = 1e-9;
+
+/**
+ * Task types for evaluation
+ */
+export const TaskType = {
+  EXACT: "exact",       // JSON exact match
+  NUMERIC: "numeric",   // Floating point with tolerance
+  PARTIAL: "partial",   // Similarity-based
+  BOOLEAN: "boolean"    // True/false check
+};
+
+/**
+ * Task-aware evaluation function
+ * Evaluates result against expected based on task type
+ * 
+ * @param {any} result - Actual result
+ * @param {any} expected - Expected result
+ * @param {string} taskType - Task type (exact, numeric, partial, boolean)
+ * @returns {number} Score 0-1
+ */
+export function evaluateTask(result, expected, taskType = TaskType.EXACT) {
+  if (result === expected) return 1;
+  
+  switch (taskType) {
+    case TaskType.EXACT:
+      return deepEqual(result, expected) ? 1 : 0;
+    
+    case TaskType.NUMERIC:
+      return numericEqual(result, expected) ? 1 : 0;
+    
+    case TaskType.PARTIAL:
+      return partialSimilarity(result, expected);
+    
+    case TaskType.BOOLEAN:
+      return Boolean(result) === Boolean(expected) ? 1 : 0;
+    
+    default:
+      return deepEqual(result, expected) ? 1 : 0;
+  }
+}
+
+/**
+ * Numeric equality with tolerance
+ */
+function numericEqual(a, b) {
+  const numA = Number(a);
+  const numB = Number(b);
+  
+  if (isNaN(numA) && isNaN(numB)) return true;
+  if (isNaN(numA) || isNaN(numB)) return false;
+  
+  return Math.abs(numA - numB) < TOLERANCE;
+}
+
+/**
+ * Partial similarity for complex objects
+ * Returns 0-1 score based on common fields
+ */
+function partialSimilarity(a, b) {
+  if (a === b) return 1;
+  if (a === null || b === null) return 0;
+  if (typeof a !== "object" || typeof b !== "object") return 0;
+  
+  const keysA = Object.keys(a || {});
+  const keysB = Object.keys(b || {});
+  const common = keysA.filter(k => keysB.includes(k));
+  
+  if (common.length === 0) return 0;
+  
+  let matches = 0;
+  for (const key of common) {
+    if (deepEqual(a[key], b[key])) {
+      matches++;
+    }
+  }
+  
+  return matches / common.length;
+}
 
 /**
  * Deep equality with floating point tolerance

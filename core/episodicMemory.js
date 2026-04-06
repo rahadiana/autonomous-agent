@@ -369,3 +369,63 @@ export function matchTemplate(template, goal) {
 
   return matches / template.actionSequence.length;
 }
+
+/**
+ * Adapt a plan to new input by overriding parameters
+ * Used when reusing plans with different inputs
+ * 
+ * @param {Object} plan - Original plan with bestPath
+ * @param {Object} newInput - New input parameters to override
+ * @returns {Object} Adapted plan
+ */
+export function adaptPlan(plan, newInput) {
+  if (!plan?.bestPath) return plan;
+  
+  const adaptedSteps = plan.bestPath.map(step => {
+    // Clone the step
+    const adaptedStep = { ...step };
+    
+    // If step has input, merge with newInput
+    if (step.input) {
+      adaptedStep.input = { ...step.input, ...newInput };
+    }
+    
+    return adaptedStep;
+  });
+  
+  return {
+    ...plan,
+    bestPath: adaptedSteps,
+    adapted: true,
+    originalInput: plan.input
+  };
+}
+
+/**
+ * Extract context from episode for matching
+ * Stores input/output schema for better reuse matching
+ * 
+ * @param {Object} episode - Episode to extract context from
+ * @returns {Object} Context with schema info
+ */
+export function extractEpisodeContext(episode) {
+  return {
+    inputSchema: extractSchema(episode.plan?.bestPath?.[0]?.input),
+    outputSchema: extractSchema(episode.result),
+    capability: episode.plan?.bestPath?.[0]?.capability
+  };
+}
+
+function extractSchema(obj) {
+  if (!obj) return null;
+  
+  const schema = {};
+  for (const key of Object.keys(obj)) {
+    const val = obj[key];
+    schema[key] = {
+      type: typeof val,
+      value: val !== null ? val : "null"
+    };
+  }
+  return schema;
+}
