@@ -69,27 +69,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ```javascript
   {
     reEvalInterval: 5,         // Re-evaluate every 5 uses
-    explorationRate: 0.1,     // 10% exploration
     decayRate: 0.02,           // 2% score decay per day
     mutationRate: 0.0,         // DISABLED
-    scoreInertia: 0.7,         // 70% old, 30% new
-    reEvalCooldown: 3600000,    // 1 hour between re-evals
-    confidenceCap: 20,        // Full confidence at 20 uses
-    confidenceWeight: 0.2,    // 20% confidence in score
     
-    // NEW: Additional stabilization
-    skillCooldown: 300000,     // 5 min cooldown for new skills
+    // Selection strategy (NEW: UCB bandit)
+    selectionStrategy: 'ucb',  // 'greedy' | 'ucb' | 'thompson'
+    ucbConstant: 1.414,         // sqrt(2) - standard exploration constant
+    
+    scoreInertia: 0.7,          // 70% old, 30% new
+    reEvalCooldown: 3600000,    // 1 hour between re-evals
+    confidenceCap: 20,          // Full confidence at 20 uses
+    confidenceWeight: 0.2,      // 20% confidence in score
+    
+    // Stabilization
+    skillCooldown: 300000,      // 5 min cooldown for new skills
     mutationMinUsage: 5,       // Min uses before mutation
-    mutationTopPercent: 30,    // Only mutate top 30%
-    scoreNormalization: true   // Normalize scores for bandit
+    mutationTopPercent: 30,     // Only mutate top 30%
+    scoreNormalization: true    // Normalize scores for bandit
   }
   ```
 
 ### Changed
 
 - **`core/executor.js`** - No changes, but now integrated with evaluator
-- **`core/bandit.js`** - No longer imported in skillService (exploration handled locally)
-- **`services/skillService.js`** - Complete rewrite for evaluator integration
+- **`core/bandit.js`** - No longer imported in skillService (UCB implemented directly)
+- **`services/skillService.js`** - Complete rewrite with UCB bandit selection
+  - Replaced manual exploration/exploitation with proper UCB1 algorithm
+  - Added Thompson Sampling as alternative
+  - Log output shows UCB breakdown (exploitation vs exploration)
 - **`models/skill.js`** - Added `status` and `last_evaluated_at` fields
 
 ### Removed

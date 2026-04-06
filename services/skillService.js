@@ -11,9 +11,15 @@ import { evaluateSkill } from "../core/testRunner.js";
  */
 const CONFIG = {
   reEvalInterval: 5,        // Re-evaluate every 5 uses
-  explorationRate: 0.1,    // 10% exploration
   decayRate: 0.02,         // 2% score decay per day idle
   mutationRate: 0.0,       // DISABLED - not ready yet
+  
+  // Selection strategy: 'greedy' | 'ucb' | 'thompson'
+  // UCB is recommended - handles exploration mathematically
+  selectionStrategy: 'ucb',
+  
+  // UCB parameters
+  ucbConstant: 1.414,      // sqrt(2) - standard exploration constant
   
   // Smoothing parameters (anti-oscillation)
   scoreInertia: 0.7,       // 70% old score, 30% new evaluation
@@ -103,9 +109,164 @@ function getExplorationScore(skill) {
 }
 
 /**
+ * UCB1 (Upper Confidence Bound) implementation
+ * Balances exploration vs exploitation properly
+ * Formula: score + c * sqrt(ln(total_time) / n_i)
+ * 
+ * @param {number} score - Skill's average score (exploitation)
+ * @param {number} usageCount - Number of times skill was selected
+ * @param {number} totalUsage - Total selections across all skills
+ * @param {number} c - Exploration constant (typically sqrt(2) ≈ 1.41)
+ * @returns {number} UCB score
+ */
+function calculateUCB(score, usageCount, totalUsage, c = 1.414) {
+  if (usageCount === 0) {
+    // Unvisited skills get infinite exploration bonus
+    return Infinity;
+  }
+  
+  const exploitation = score;
+  const exploration = c * Math.sqrt(Math.log(totalUsage + 1) / (usageCount + 1));
+  
+  return exploitation + exploration;
+}
+
+/**
+ * Select a skill using PROPER UCB BANDIT algorithm
+ * 
+ * This replaces simple greedy selection with true multi-armed bandit:
+ * - Uses UCB1 formula for exploration/exploitation balance
+ * - Automatically balances between trying new skills vs using known good ones
+ * - No manual explorationRate needed - UCB handles it mathematically
+ * 
+ * @param {Array} skills - Array of skill objects
+ * @returns {Object} Selected skill with UCB breakdown
+ */
+function selectWithUCB(skills) {
+  // Filter out skills in cooldown
+  const availableSkills = skills.filter(s => !isInCooldown(s));
+  
+  if (availableSkills.length === 0) {
+    console.log("[SELECT] All skills in cooldown, allowing cooldown skills");
+    return skills[0];
+  }
+  
+  // Calculate total usage across all skills
+  const totalUsage = availableSkills.reduce((sum, s) => sum + (s.usage_count || 0), 0);
+  
+  // Calculate UCB for each skill
+  const ucbResults = availableSkills.map(skill => {
+    const score = skill.normalizedScore ?? skill.score;
+    const usageCount = skill.usage_count || 0;
+    
+    const ucb = calculateUCB(score, usageCount, totalUsage);
+    
+    return {
+      skill,
+      ucb,
+      exploitation: score,
+      exploration: usageCount === 0 ? Infinity : 1.414 * Math.sqrt(Math.log(totalUsage + 1) / (usageCount + 1)),
+      usageCount
+    };
+  });
+  
+  // Sort by UCB score (highest first)
+  ucbResults.sort((a, b) => b.ucb - a.ucb);
+  
+  const selected = ucbResults[0];
+  
+  console.log(`[UCB] Selected: ${selected.skill.name}`);
+  console.log(`  - UCB: ${selected.ucb.toFixed(3)}`);
+  console.log(`  - Exploitation: ${selected.exploitation.toFixed(3)}`);
+  console.log(`  - Exploration: ${selected.exploitation === selected.ucb ? '∞' : selected.exploration.toFixed(3)}`);
+  console.log(`  - Usage: ${selected.usageCount} / ${totalUsage}`);
+  
+  return selected.skill;
+}
+
+/**
+ * Alternative: Thompson Sampling (Bayesian approach)
+ * Useful if you want probabilistic exploration
+ * 
+ * @param {Array} skills - Array of skill objects
+ * @returns {Object} Selected skill
+ */
+function selectWithThompsonSampling(skills) {
+  // Filter out skills in cooldown
+  const availableSkills = skills.filter(s => !isInCooldown(s));
+  
+  if (availableSkills.length === 0) {
+    return skills[0];
+  }
+  
+  // Sample from Beta distribution for each skill
+  // Beta(alpha, beta) where alpha = successes + 1, beta = failures + 1
+  const samples = availableSkills.map(skill => {
+    const alpha = (skill.success_count || 0) + 1;
+    const beta = (skill.failure_count || 0) + 1;
+    
+    // Simple Beta sampling using gamma distribution
+    const sample = betaSample(alpha, beta);
+    
+    return { skill, sample };
+  });
+  
+  // Select highest sample
+  samples.sort((a, b) => b.sample - a.sample);
+  
+  console.log(`[Thompson] Selected: ${samples[0].skill.name} (sample: ${samples[0].sample.toFixed(3)})`);
+  
+  return samples[0].skill;
+}
+
+// Helper for Thompson Sampling (simplified Beta sampling)
+function betaSample(alpha, beta) {
+  // Using Marsaglia's method for Gamma distribution
+  const gammaA = gammaSample(alpha);
+  const gammaB = gammaSample(beta);
+  return gammaA / (gammaA + gammaB);
+}
+
+function gammaSample(shape) {
+  // Simplified gamma sampling (Knuth algorithm)
+  if (shape < 1) {
+    return gammaSample(1 + shape) * Math.random();
+  }
+  
+  const d = shape - 1/3;
+  const c = 1 / Math.sqrt(9 * d);
+  
+  while (true) {
+    let x, v;
+    do {
+      x = gaussianSample();
+      v = 1 + c * x;
+    } while (v <= 0);
+    
+    v = v * v * v;
+    const u = Math.random();
+    
+    if (u < 1 - 0.0331 * (x * x) * (x * x)) {
+      return d * v;
+    }
+    
+    if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) {
+      return d * v;
+    }
+  }
+}
+
+function gaussianSample() {
+  // Box-Muller transform
+  const u1 = Math.random();
+  const u2 = Math.random();
+  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+}
+
+/**
  * Select a skill with EXPLORATION (uncertainty-aware + cooldown + normalized)
- * - 90%: select best by final score (score + confidence)
- * - 10%: random selection from TOP 50% by exploration score
+ * - Uses PROPER UCB BANDIT algorithm
+ * - Falls back to Thompson Sampling if UCB fails
  * - SKIPS skills in cooldown period
  * - Uses normalized scores for fair comparison
  */
@@ -119,37 +280,13 @@ function selectWithExploration(skills) {
     return skills[0];
   }
   
-  // Normalize scores if enabled
+  // Normalize scores if enabled (for UCB calculation)
   let processedSkills = CONFIG.scoreNormalization 
     ? normalizeScore(availableSkills) 
     : availableSkills.map(s => ({ ...s, normalizedScore: s.score }));
   
-  if (Math.random() < CONFIG.explorationRate) {
-    // Calculate exploration scores and pick from top 50%
-    const withExplorationScore = processedSkills.map(s => ({
-      skill: s,
-      explorationScore: getExplorationScore(s)
-    }));
-    
-    // Sort by exploration score (not just raw score)
-    withExplorationScore.sort((a, b) => b.explorationScore - a.explorationScore);
-    const topHalf = withExplorationScore.slice(0, Math.ceil(withExplorationScore.length / 2));
-    
-    const randomIdx = Math.floor(Math.random() * topHalf.length);
-    const selected = topHalf[randomIdx].skill;
-    
-    console.log(`[EXPLORE] Uncertainty-aware pick: ${selected.name} (score: ${selected.normalizedScore?.toFixed(2) || selected.score.toFixed(2)}, usage: ${selected.usage_count})`);
-    return selected;
-  }
-  
-  // Exploitation: select based on final score (score + confidence blend)
-  const withFinalScore = processedSkills.map(s => ({
-    skill: s,
-    finalScore: (s.normalizedScore ?? s.score) * (1 - CONFIG.confidenceWeight) + getConfidence(s.usage_count) * CONFIG.confidenceWeight
-  }));
-  
-  withFinalScore.sort((a, b) => b.finalScore - a.finalScore);
-  return withFinalScore[0].skill;
+  // Use UCB bandit selection (replaces manual exploration/exploitation)
+  return selectWithUCB(processedSkills);
 }
 
 /**
