@@ -412,3 +412,43 @@ export class UnifiedEvaluator {
 }
 
 export default unifiedEvaluate;
+
+/**
+ * Compute Reward Function
+ * Simple scoring based on next_plan.md line 153-181
+ * 
+ * @param {Object} params - { result, validation, skill }
+ * @returns {number} - reward score 0-1
+ */
+export function computeReward({ result, validation, skill }) {
+  let score = 0;
+
+  // 1. Schema validity (30%)
+  if (validation?.valid) {
+    score += 0.3;
+  }
+
+  // 2. Output richness (20%)
+  if (typeof result === "object" && result !== null && Object.keys(result).length > 0) {
+    score += 0.2;
+  }
+
+  // 3. Determinism check (20%)
+  // More usage = more established/deterministic skill
+  if (skill?.usage_count > 3) {
+    score += 0.2;
+  }
+
+  // 4. Latency bonus (10%)
+  if (result?._latency !== undefined && result._latency < 100) {
+    score += 0.1;
+  }
+
+  // 5. Historical success rate (20%)
+  const successRate = skill?.usage_count > 0
+    ? skill.success_count / skill.usage_count
+    : 0;
+  score += successRate * 0.2;
+
+  return Math.min(1, score);
+}

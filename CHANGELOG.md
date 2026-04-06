@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.0] - 2026-04-06
+
+### Summary
+Implemented all critical missing components from the architectural diagnosis - closed learning loop, real evaluator, duplicate detection, capability normalization, and failure memory.
+
+### Added
+
+#### Learning Orchestrator (NEW)
+- **`core/learningOrchestrator.js`** - Central learning loop
+  - Phase 1: Goal/Input retrieval
+  - Phase 2: Skill retrieval with bandit
+  - Phase 3: Skill selection (UCB)
+  - Phase 4: Execution (DSL)
+  - Phase 5: Output validation
+  - Phase 6: Real reward computation
+  - Phase 7: Skill stats update
+  - Phase 8: Exploration (15% probability)
+  - Phase 9: Episodic memory save
+  - Integrates: executor, validator, skillRegistry, bandit, testRunner, episodicMemory
+
+#### Real Evaluator (NEW)
+- **`core/unifiedEvaluator.js`** - Added `computeReward()` function
+  - Schema validity: 30%
+  - Output richness: 20%
+  - Determinism check (usage > 3): 20%
+  - Latency penalty (<100ms): 10%
+  - Historical success rate: 20%
+  - Bounded to [0, 1] range
+
+#### Duplicate Detection (NEW)
+- **`core/duplicateDetection.js`** - Prevents skill explosion
+  - `isDuplicateSkill(newSkill, existingSkills)` - JSON logic comparison
+  - `isDuplicateCapability(skill, existingSkills)` - Normalized capability comparison
+  - `normalizeCapability(text)` - Helper for text normalization
+
+#### Capability Normalization (NEW)
+- **`core/capabilityNormalization.js`** - Standardizes skill capabilities
+  - `normalizeCapability(text)` - lowercase, alphanumeric only, underscore format
+  - `enforceCapabilityNormalization(skill)` - Applies normalization to skill
+
+#### Failure Memory (NEW)
+- **`core/failureMemory.js`** - Tracks failures for better learning
+  - `logFailure(input, skill, error)` - Stores failure entries
+  - `tooManyFailures(skill)` - Checks failure threshold (3)
+  - `applyFailurePenalty(skill)` - 50% score penalty on too many failures
+  - Storage: In-memory Map
+
+### Architecture Changes
+
+```
+NOW (CLOSED LOOP):
+  Goal → Retrieve → Select (Bandit) → Execute → Validate → 
+  Compute Reward → Update Stats → Explore → Memory → Repeat
+```
+
+---
+
 ## [1.5.1] - 2026-04-07
 
 ### Summary
