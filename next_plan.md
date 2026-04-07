@@ -1,98 +1,131 @@
-Saya sudah membaca file yang kamu kirim (arsitektur DSL, planner, blackboard, mutation, dll). Sekarang saya akan langsung ke poin penting:
+Saya sudah baca struktur + file konsep yang kamu bangun. Saya tidak akan “ngulang isi file”—yang kamu butuh adalah **gap analysis terhadap implementasi real vs blueprint** + **patch konkret yang bisa langsung dipakai agent kamu**.
 
-👉 Sistem kamu **sudah advanced secara konsep**, tapi **belum konsisten secara runtime & integrasi**.
-Masalahnya bukan kurang fitur — tapi **ketidaksinkronan antar layer**.
-
-Saya breakdown secara brutal dan preskriptif.
+Di bawah ini kritiknya **tajam + spesifik ke failure mode**.
 
 ---
 
-# 🚨 1. MASALAH UTAMA (STRUKTURAL)
+# 🚨 0. DIAGNOSIS CEPAT (MASALAH UTAMA)
 
-## ❌ 1.1 Tidak ada “single source of truth” pipeline
+Dari semua file (planner, DSL, memory, mutation, dll), sistem kamu:
 
-Kamu punya banyak pipeline:
+### ❌ Sudah advanced di konsep
 
-* skill-based execution 
-* multi-agent orchestration 
-* blackboard system 
-* evolutionary loop 
+### ❌ Tapi belum “closed-loop deterministic system”
 
-👉 Tapi tidak ada **unified runtime flow**
+Masalah inti:
 
-### Dampak:
+1. **Belum ada kontrol kualitas global**
+2. **Belum ada integrasi antar layer (masih silo)**
+3. **Belum ada invariant system (guardrail keras)**
+4. **Belum ada “state truth” tunggal**
 
-* Planner vs skill system konflik
-* Kadang pakai DSL, kadang multi-agent
-* Tidak deterministic
+Akibatnya:
+👉 agent terlihat pintar
+👉 tapi **tidak stabil + tidak konsisten**
 
 ---
 
-## ✅ FIX (WAJIB)
+# 🔴 1. MASALAH PALING KRITIS (WAJIB FIX)
 
-Buat satu entrypoint:
+## ❌ A. SKILL EXECUTION TIDAK TERKONTROL
+
+Kamu punya:
+
+* DSL
+* MCP
+* code execution
+
+Tapi tidak ada **unified execution contract**
+
+➡️ Ini fatal
+
+---
+
+## ✅ FIX: UNIFIED EXECUTION LAYER
+
+Tambahkan layer ini:
 
 ```ts
-async function runAgent(input) {
-  const context = initContext(input);
+type ExecutionResult = {
+  success: boolean;
+  output: any;
+  error?: string;
+  latency: number;
+};
+```
 
-  // 1. capability search
-  const skill = await findBestSkill(context);
+### Wrapper WAJIB:
 
-  if (skill) {
-    return executeSkillFlow(skill, context);
+```ts
+async function safeExecute(skill, input): Promise<ExecutionResult> {
+  const start = Date.now();
+
+  try {
+    const output = await runDSL(skill, input);
+
+    return {
+      success: true,
+      output,
+      latency: Date.now() - start
+    };
+  } catch (err) {
+    return {
+      success: false,
+      output: null,
+      error: err.message,
+      latency: Date.now() - start
+    };
   }
-
-  // 2. planning fallback
-  return runPlanningFlow(context);
 }
 ```
 
 ---
 
-# 🚨 2. EXECUTOR MASIH SETENGAH MATANG
+## 🔥 Dampak
 
-Kamu sudah punya DSL + MCP 
-Tapi:
+Tanpa ini:
 
-## ❌ masalah:
-
-* tidak ada **step-level validation**
-* tidak ada **type safety antar step**
-* tidak ada **trace debugging**
+* evaluator tidak valid
+* reinforcement bias
+* mutation ngawur
 
 ---
 
-## ✅ FIX (CRITICAL)
+# 🔴 2. VALIDATION SYSTEM BELUM GLOBAL
 
-Tambahkan trace + validation per step:
+Sekarang:
+
+* validator dipakai lokal
+* tidak enforce di semua boundary
+
+➡️ Harus jadi **hard gate**
+
+---
+
+## ✅ FIX: GLOBAL VALIDATION PIPELINE
 
 ```ts
-async function executeStep(step, ctx) {
-  const before = JSON.parse(JSON.stringify(ctx));
-
-  let result;
-
-  switch (step.op) {
-    case "set":
-      result = setValue(ctx, step);
-      break;
-    case "mcp_call":
-      result = await callMCP(step, ctx);
-      break;
+async function executeWithValidation(skill, input) {
+  // 1. validate input
+  const inputCheck = validate(skill.input_schema, input);
+  if (!inputCheck.valid) {
+    return { success: false, error: "invalid input" };
   }
 
-  // VALIDATION
-  if (step.expect_schema) {
-    const valid = validate(step.expect_schema, result);
-    if (!valid) throw new Error("Step validation failed");
-  }
+  // 2. execute
+  const result = await safeExecute(skill, input);
 
-  ctx.trace.push({
-    step,
-    before,
-    after: ctx
-  });
+  if (!result.success) return result;
+
+  // 3. validate output
+  const outputCheck = validate(skill.output_schema, result.output);
+
+  if (!outputCheck.valid) {
+    return {
+      success: false,
+      error: "invalid output schema"
+    };
+  }
 
   return result;
 }
@@ -100,159 +133,109 @@ async function executeStep(step, ctx) {
 
 ---
 
-## 📌 INPUT / OUTPUT
+## ⚠️ Reality
 
-### Input:
-
-```json
-{
-  "input": { "url": "https://api.com" }
-}
-```
-
-### Output:
-
-```json
-{
-  "output": { "data": {...} },
-  "trace": [
-    { "step": "mcp_call", "status": "ok" }
-  ]
-}
-```
+Kalau ini tidak ada:
+👉 system kamu = chaos engine
 
 ---
 
-# 🚨 3. SKILL SYSTEM BELUM “LEARNING SYSTEM”
+# 🔴 3. SKILL MEMORY SUDAH ADA — TAPI BELUM DIPAKAI BENAR
 
-Kamu sudah punya:
+File kamu sudah benar konsepnya 
+Tapi problem:
 
-* reinforcement
-* decay
-* versioning 
-
-👉 Tapi belum terhubung ke **decision system**
+### ❌ Score tidak dipakai saat selection
 
 ---
 
-## ❌ masalah:
+## ✅ FIX: UNIFIED RANKING ENGINE
 
-Skill dipilih hanya berdasarkan similarity / score
-
-Padahal kamu sudah punya bandit system 
-
-👉 tapi tidak diintegrasikan
-
----
-
-## ✅ FIX
-
-Ganti selector:
+Gabungkan semua:
 
 ```ts
-async function selectSkill(skills) {
-  const total = skills.reduce((s, x) => s + x.usage_count, 0);
+function rankSkill(skill, similarity, totalSelections) {
+  const bandit =
+    skill.score +
+    1.2 * Math.sqrt(Math.log(totalSelections + 1) / (skill.usage_count + 1));
 
-  return skills
-    .map(s => ({
-      skill: s,
-      score: banditScore(s, total)
-    }))
-    .sort((a, b) => b.score - a.score)[0].skill;
+  const fresh =
+    Math.exp(-0.1 * daysSince(skill.last_used_at));
+
+  return (
+    similarity * 0.5 +
+    bandit * 0.3 +
+    fresh * 0.2
+  );
 }
 ```
 
 ---
 
-## 📌 INPUT / OUTPUT
+## 🔥 Dampak
 
-### Input:
+Tanpa ini:
 
-```json
-[
-  { "score": 0.8, "usage_count": 10 },
-  { "score": 0.7, "usage_count": 1 }
-]
-```
-
-### Output:
-
-```json
-{
-  "selected": "low_usage_skill_due_to_exploration"
-}
-```
+* skill bagus tidak dipakai
+* system tidak “belajar”
 
 ---
 
-# 🚨 4. PLANNER TIDAK TERHUBUNG KE SKILL REGISTRY
+# 🔴 4. MUTATION SYSTEM BELUM AMAN
 
-Hierarchical planner kamu bagus 
-Tapi:
+Dari file mutation 
 
-## ❌ masalah:
+Masalah:
 
-Planner bisa generate capability yang tidak ada
+### ❌ mutation langsung ke production candidate
 
 ---
 
-## ✅ FIX (WAJIB)
-
-Whitelist capability:
+## ✅ FIX: SANDBOX MUTATION TEST
 
 ```ts
-function validatePlan(plan, registry) {
-  for (const step of plan.steps) {
-    if (!registry.has(step.capability)) {
-      throw new Error("Unknown capability: " + step.capability);
-    }
+async function testMutation(skill) {
+  const mutated = mutateSkill(skill.json);
+
+  if (!validateDSL(mutated)) return null;
+
+  const testCases = buildTestCases(skill);
+
+  let pass = 0;
+
+  for (const t of testCases) {
+    const res = await safeExecute(mutated, t.input);
+    if (res.success) pass++;
   }
+
+  return pass / testCases.length;
 }
 ```
 
 ---
 
-## 📌 INPUT / OUTPUT
+## PROMOTION RULE (WAJIB)
 
-### Input:
-
-```json
-{
-  "steps": [
-    { "capability": "api.fetch" },
-    { "capability": "unknown.magic" }
-  ]
-}
-```
-
-### Output:
-
-```json
-{
-  "error": "Unknown capability: unknown.magic"
+```ts
+if (mutationScore > original.score + 0.1) {
+  promote();
 }
 ```
 
 ---
 
-# 🚨 5. BLACKBOARD + SCHEDULER BELUM TERKONTROL
+# 🔴 5. BLACKBOARD SUDAH ADA — TAPI BELUM TERKUNCI
 
-Kamu sudah punya:
+File kamu sudah benar 
+Masalah:
 
-* blackboard 
-* attention + scheduler 
+### ❌ race condition
 
-## ❌ masalah:
-
-* tidak ada lock
-* tidak ada versioning state
-* race condition pasti terjadi
+### ❌ overwrite state
 
 ---
 
-## ✅ FIX
-
-Tambahkan version:
+## ✅ FIX: VERSIONED STATE
 
 ```ts
 class Blackboard {
@@ -262,14 +245,11 @@ class Blackboard {
   }
 
   set(patch) {
-    this.state = { ...this.state, ...patch };
     this.version++;
-  }
-
-  getSnapshot() {
-    return {
-      state: this.state,
-      version: this.version
+    this.state = {
+      ...this.state,
+      ...patch,
+      _version: this.version
     };
   }
 }
@@ -277,142 +257,204 @@ class Blackboard {
 
 ---
 
-# 🚨 6. MUTATION SYSTEM MASIH BERBAHAYA
+## 🔥 Dampak
 
-Mutation kamu bagus 
-Tapi:
-
-## ❌ masalah:
-
-* tidak ada constraint semantic
-* hanya random op
-
-👉 ini bikin **regression**
+Tanpa ini:
+👉 agent akan overwrite hasil sendiri
 
 ---
 
-## ✅ FIX
+# 🔴 6. PLANNER + CRITIC LOOP BELUM ADA STOP CONDITION KUAT
 
-Tambahkan constraint:
+Dari file planner loop 
+
+Masalah:
+
+### ❌ bisa infinite refine
+
+---
+
+## ✅ FIX: HARD STOP + REGRESSION DETECTION
 
 ```ts
-function safeMutate(skill) {
-  const mutated = mutateSkill(skill);
+if (iteration >= 3) break;
 
-  if (!validateDSL(mutated)) return null;
-
-  if (complexity(mutated) > complexity(skill) * 1.5) {
-    return null;
-  }
-
-  return mutated;
+if (newScore < prevScore) {
+  break; // stop regression
 }
 ```
 
 ---
 
-# 🚨 7. CODE GENERATION SYSTEM (PALING BERISIKO)
+# 🔴 7. GOAL SYSTEM SUDAH ADA — TAPI BELUM TERKONTROL
 
-Kamu sudah masuk ke level generate code 
+File kamu 
 
-👉 ini bagus, tapi:
+Masalah:
 
-## ❌ masalah:
-
-* belum ada fallback priority
-* belum ada A/B testing
+### ❌ goal explosion
 
 ---
 
-## ✅ FIX
+## ✅ FIX: GOAL FILTER
 
 ```ts
-async function executeHybrid(capability, input) {
-  const code = await findBestCode(capability);
-
-  if (code && code.score > 0.85) {
-    try {
-      return await runSandbox(code, input);
-    } catch {}
-  }
-
-  return runDSL(await getSkill(capability), input);
+function filterGoals(goals) {
+  return goals
+    .filter(g => g.priority > 0.5)
+    .slice(0, 5);
 }
 ```
 
 ---
 
-# 🚨 8. GOAL SYSTEM TERLALU CEPAT DIPASANG
+# 🔴 8. EXECUTOR DSL MASIH TERLALU “NAIF”
 
-Autonomous goal system 
+Masalah:
 
-👉 ini level advanced
+### ❌ tidak ada step limit
 
-## ❌ masalah:
-
-Fondasi kamu belum stabil tapi sudah tambah complexity
+### ❌ tidak ada timeout
 
 ---
 
-## ⚠️ Saran keras:
-
-Matikan dulu:
+## ✅ FIX: EXECUTION GUARD
 
 ```ts
-ENABLE_CURIOSITY = false
+const MAX_STEPS = 20;
+
+for (let i = 0; i < skill.logic.length; i++) {
+  if (i > MAX_STEPS) {
+    throw new Error("step overflow");
+  }
+
+  await executeStep(...);
+}
 ```
 
 ---
 
-# 🧠 FINAL VERDICT
+# 🔴 9. TIDAK ADA “SYSTEM METRICS”
 
-## Kondisi sekarang:
-
-* Arsitektur: ⭐⭐⭐⭐⭐ (overkill bahkan)
-* Implementasi: ⭐⭐ (belum nyambung)
-
-👉 Ini bukan masalah skill kamu
-👉 Ini masalah **integration discipline**
+➡️ ini fatal untuk debugging
 
 ---
 
-# 🔥 PRIORITAS PERBAIKAN (WAJIB URUT)
+## ✅ FIX: TRACE SYSTEM
 
-### 1️⃣ Executor + Validator + Trace (core runtime)
-
-### 2️⃣ Skill selection (bandit)
-
-### 3️⃣ Unified pipeline (single entrypoint)
-
-### 4️⃣ Planner → registry validation
-
-### 5️⃣ Baru: mutation + evolution
-
-### 6️⃣ Terakhir: goal system
+```ts
+type Trace = {
+  step: number;
+  op: string;
+  input: any;
+  output: any;
+};
+```
 
 ---
 
-# 🎯 KESIMPULAN
+# 🧪 10. CONTOH END-TO-END (WAJIB PAHAM)
 
-Kalau kamu lanjut tanpa fix ini:
+## INPUT
 
-👉 sistem kamu akan:
-
-* terlihat pintar
-* tapi tidak stabil
-* tidak benar-benar belajar
-
-Kalau kamu fix:
-
-👉 ini bisa jadi:
-**real autonomous system (bukan demo)**
+```json
+{
+  "goal": "jumlahkan 2 angka",
+  "input": { "a": 2, "b": 3 }
+}
+```
 
 ---
 
-Kalau kamu mau lanjut, pilih satu:
+## FLOW
 
-* “fix executor jadi production-grade”
-* “fix planner + registry integration”
-* “refactor jadi unified pipeline”
+1. capability match → tidak ada
+2. generate skill
 
-Saya akan breakdown sampai level file + refactor nyata.
+```json
+{
+  "name": "sum",
+  "capability": "math.add",
+  "logic": [
+    { "op": "add", "a": "input.a", "b": "input.b", "to": "result" },
+    { "op": "set", "path": "output.result", "value": "result" }
+  ]
+}
+```
+
+---
+
+## TEST RESULT
+
+```json
+{
+  "result": { "result": 5 }
+}
+```
+
+---
+
+## EVALUATION
+
+```json
+{
+  "score": 0.92,
+  "valid": true
+}
+```
+
+---
+
+## FINAL OUTPUT
+
+```json
+{
+  "result": { "result": 5 }
+}
+```
+
+---
+
+# 🧠 REALITY CHECK (PENTING)
+
+Sistem kamu sekarang:
+
+### ✅ Sudah:
+
+* modular
+* adaptive
+* evolving
+
+### ❌ Tapi belum:
+
+* stable
+* deterministic
+* production-safe
+
+---
+
+# 🎯 PRIORITAS PERBAIKAN (URUTAN WAJIB)
+
+Jangan lompat.
+
+1. **Execution wrapper (safeExecute)**
+2. **Global validation**
+3. **Skill ranking (bandit + score)**
+4. **Mutation sandbox**
+5. **Blackboard versioning**
+6. **Planner stop condition**
+
+Kalau kamu skip urutan:
+👉 sistem kamu bakal “terlihat hidup tapi sebenarnya rusak”
+
+---
+
+# 🚀 NEXT STEP (KRITIS)
+
+Kalau kamu serius mau naik level:
+
+👉 bilang:
+
+**“audit executor DSL + kasih versi production-ready (full code)”**
+
+Saya akan bongkar executor kamu sampai level aman production (termasuk MCP, branching, loop, dll).
