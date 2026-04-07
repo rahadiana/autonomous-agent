@@ -323,6 +323,53 @@ export function validatePlan(plan, registry) {
   };
 }
 
+export function isCompatible(outputSchema, inputSchema) {
+  if (!outputSchema || !inputSchema) return true;
+  
+  if (!inputSchema.properties) return true;
+  
+  for (const [key, prop] of Object.entries(inputSchema.properties)) {
+    const outputType = outputSchema.properties?.[key]?.type;
+    const expectedType = prop.type;
+    
+    if (outputType && outputType !== expectedType) {
+      return false;
+    }
+  }
+  
+  return true;
+}
+
+export function validatePlanSchemaCompatibility(plan, registry) {
+  if (!plan?.bestPath || plan.bestPath.length === 0) {
+    return { valid: true, errors: [] };
+  }
+  
+  const errors = [];
+  
+  for (let i = 0; i < plan.bestPath.length - 1; i++) {
+    const current = plan.bestPath[i];
+    const next = plan.bestPath[i + 1];
+    
+    const currentSkill = registry.get(current.capability);
+    const nextSkill = registry.get(next.capability);
+    
+    if (currentSkill && nextSkill) {
+      const currentOutput = currentSkill.output_schema;
+      const nextInput = nextSkill.input_schema;
+      
+      if (!isCompatible(currentOutput, nextInput)) {
+        errors.push(`Schema mismatch between ${current.capability} and ${next.capability}`);
+      }
+    }
+  }
+  
+  return {
+    valid: errors.length === 0,
+    errors
+  };
+}
+
 export function createRegistry(skills) {
   const registry = new Set();
   for (const skill of skills) {

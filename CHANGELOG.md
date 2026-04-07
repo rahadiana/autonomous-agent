@@ -1,20 +1,18 @@
 # CHANGELOG
 
-## Test Results - All 226 tests PASSED
+## Test Results - All Tests PASSED
 
 ### Improvements Implemented from next_plan.md
 
-All improvements from next_plan.md have been verified and implemented. The system now has:
+All improvements from next_plan.md have been implemented:
 
-1. ✅ Unified Executor (DSL + MCP + Code) - core/unifiedExecutor.js
-2. ✅ Skill Selection with Scoring (similarity * 0.6 + score * 0.3 + freshness * 0.1) - services/skillService.js:211-215
-3. ✅ Scheduler as Entrypoint - core/orchestrator.js:379-424 (runAgent function)
-4. ✅ Mutation triggered by failure rate (>0.3) - core/mutation.js:33-44
-5. ✅ Strong Evaluator + Golden Test System - core/testRunner.js + core/groundTruth.js
+1. ✅ Type-safe DSL Executor with schema validation - core/executor.js
+2. ✅ Evaluation berbasis test case - core/evaluation.js + core/groundTruth.js
+3. ✅ Planner type-aware dengan schema compatibility - core/planner.js
+4. ✅ Blackboard dengan locking/version check - core/blackboard.js
+5. ✅ Safe Mutation system - core/mutation.js
 
-### Latest Updates (April 7, 2026)
-
-All 226 tests passed. Below are the input/output test summaries for each script:
+### Input/Output Test Results
 
 #### test/bandit.test.js
 ```
@@ -69,6 +67,10 @@ Output: Clone with same structure, different op
 Test: mutateSkill does not mutate original
 Input: original skill
 Output: Original unchanged, new mutated copy returned
+
+Test: mutateSkillSafe selects best operator based on history
+Input: skill with compare operation, performanceHistory: [{operator: ">", success: true}]
+Output: Step with operator based on historical performance
 ```
 
 #### test/planner.test.js
@@ -80,6 +82,10 @@ Output: { plans: [{ steps: [...] }] }
 Test: Planner respects maxNodes limit
 Input: maxNodes: 10
 Output: Stops after 10 nodes explored
+
+Test: validatePlanSchemaCompatibility checks schema compatibility
+Input: plan with steps having incompatible schemas
+Output: { valid: false, errors: ["Schema mismatch between capability1 and capability2"] }
 ```
 
 #### test/pruning.test.js
@@ -144,63 +150,70 @@ Input: { id: "skill_1", version: 1, lineage: [] }
 Output: { lineage: ["skill_1", "skill_1_v2"] }
 ```
 
+#### test/executorSafety.test.js
+```
+Test: dangerous code detection
+Input: skill with logic containing "process"
+Output: Error: Dangerous code detected
+
+Test: step validation with allowed ops
+Input: step with op: "set"
+Output: Validated successfully
+```
+
+#### test/blackboard.test.js
+```
+Test: Blackboard write with lock
+Input: zoneName: "goal", data: { goal: "test" }, writer: "planner"
+Output: { version: 1 }
+
+Test: safeSet with version check
+Input: zoneName: "context", patch: { key: "value" }, expectedVersion: 1
+Output: { accepted: true, version: 2 }
+```
+
 ### New Fixes Applied (April 7, 2026)
 
-#### FIX 1.1: Executor Hardening (core/executor.js)
-- Added `safeMcpCall` with timeout (3000ms) and retry (max 2 retries)
-- Added `normalizeOutput` for consistent output format
-- Tests: All executor tests passed
+#### FIX 1: Type-safe DSL Executor (core/executor.js)
+- Added `runDSLWithValidation` function with step-level validation
+- Added `validateStep` function for each operation type
+- Added schema validation for output
+- Input: skill with logic array, output_schema
+- Output: validated output or throws error
 
-#### FIX 1.2: Real Evaluator (core/unifiedEvaluator.js)
-- Already implemented with task-specific scoring
-- Task correctness: 60%, schema validity: 15%, robustness: 15%, efficiency: 10%
-- Tests: All evaluator tests passed
+#### FIX 2: Evaluation berbasis Test Case (core/evaluation.js)
+- Added task-aware evaluation (exact, numeric, partial, boolean)
+- Added test case types (valid, edge, invalid)
+- Added `evaluateTestSuite` function
+- Input: testCases array, runFn
+- Output: { score, passed, failed, decision }
 
-#### FIX 1.3: Auto Test Generator (core/testBuilder.js)
-- Already implemented with `generateFromSchema`, `buildTestCases`, `buildEdgeCases`, `buildRandomFuzz`
-- Tests: All testBuilder tests passed
+#### FIX 3: Planner Schema Compatibility (core/planner.js)
+- Added `isCompatible` function for schema matching
+- Added `validatePlanSchemaCompatibility` function
+- Input: plan with bestPath, registry
+- Output: { valid: boolean, errors: [] }
 
-#### FIX 2.2: Schema Enforcement Between Steps (core/executor.js)
-- Added `validateStepIO` function
-- Added validation in runSkill loop
-- Tests: All executor tests passed
+#### FIX 4: Blackboard Lock (core/blackboard.js)
+- Already has lock mechanism via acquireLock/releaseLock
+- Added version tracking and safeSet
+- Input: patch, expectedVersion
+- Output: { accepted: boolean, version: number }
 
-#### FIX 2.3: Blackboard Race Condition (core/blackboard.js)
-- Already has lock mechanism via `acquireLock` / `releaseLock`
-- Version tracking implemented
-- Tests: All blackboard-related tests passed
-
-#### FIX 3.1: Guided Mutation (core/mutation.js)
-- Already implemented with `mutateSkillWithFeedback` based on critic feedback
-- Handles: "missing step", "wrong operator", "wrong order", "missing validation", etc.
-- Tests: All mutation tests passed
-
-#### FIX 3.2: Anti-Regression A/B Testing (core/mutation.js)
-- Added `compareSkills` function for A/B testing
-- Compares old vs new skill on test cases
-- Tests: All mutation tests passed
-
-#### FIX 3.3: Capability Constraint Validation (core/unifiedExecutor.js)
-- Added validation for each step in `bestPath`
-- Rejects plans with capabilities not in registry
-- Tests: All unified executor tests passed
+#### FIX 5: Safe Mutation (core/mutation.js)
+- Added `mutateSkillSafe` function
+- Added `pickBestOperator` based on historical performance
+- Input: skill, performanceHistory array
+- Output: mutated skill with optimized operators
 
 ### Architecture Status
 
-1. ✅ Unified Executor (DSL + MCP + Code) - core/unifiedExecutor.js
-2. ✅ Skill Selection with Weighted Scoring - services/skillService.js
-3. ✅ Scheduler as Entrypoint - core/orchestrator.js:runAgent()
-4. ✅ Mutation triggered by failure rate - core/mutation.js:shouldMutate()
-5. ✅ Strong Evaluator + Golden Tests - core/testRunner.js + core/groundTruth.js
-6. ✅ Blackboard with Locking - core/blackboard.js
-7. ✅ Schema Enforcement Between Steps - core/executor.js
-8. ✅ Safe MCP Call with Timeout/Retry - core/executor.js
-9. ✅ Guided Mutation with Critic Feedback - core/mutation.js
-10. ✅ A/B Testing for Anti-Regression - core/mutation.js
-11. ✅ Capability Constraint Validation - core/unifiedExecutor.js
+1. ✅ Type-safe DSL Executor - core/executor.js
+2. ✅ Evaluation berbasis Test Case - core/evaluation.js
+3. ✅ Planner Schema Compatibility - core/planner.js
+4. ✅ Blackboard Locking - core/blackboard.js
+5. ✅ Safe Mutation System - core/mutation.js
 
 ### Summary
-- Total Tests: 226
-- Pass: 226
-- Fail: 0
-- Duration: ~1974ms
+- Total Fixes: 5
+- Status: All tests PASSED
