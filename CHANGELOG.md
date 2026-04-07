@@ -1,5 +1,56 @@
 # Changelog
 
+## 2026-04-07 - Production-Grade Evaluation Pipeline
+
+### New Components (per next_plan.md)
+
+#### 1. ✅ Test Generator (`core/evaluation/testGenerator.js`)
+- `generateTests`: generates normal + edge + invalid test cases from ground truth
+- `generateValidInput`, `generateEdgeCase`, `generateInvalid` helper functions
+- Schema-driven test input generation
+
+#### 2. ✅ Oracle (`core/evaluation/oracle.js`)
+- `computeExpected`: computes expected output using skill's oracle or ground truth
+- `llmOracle`: fallback for LLM-based judgment
+- Supports custom oracle functions per skill
+
+#### 3. ✅ Scorer (`core/evaluation/scorer.js`)
+- `scoreResults`: weighted scoring (schema 20%, correctness 50%, error handling 20%, consistency 10%)
+- `scoreResultsWithPenalty`: anti-cheat system detecting input leakage
+- Failure penalty (-0.3) for error cases
+
+#### 4. ✅ Dataset Management (`core/evaluation/dataset.js`)
+- `registerDataset`: register custom test datasets
+- `getDataset`: retrieve test cases for capability
+- `addToDataset`: dynamically add test cases
+- In-memory dataset storage with Map
+
+#### 5. ✅ Unified Evaluation Index (`core/evaluation/index.js`)
+- Exports all evaluation components
+- Re-exports from evaluation.js (EVAL_THRESHOLDS, TestCaseType, TaskType)
+- Re-exports evaluateTask, evaluateTestSuite, evaluateExecution, etc.
+
+### Architecture
+
+```
+Test Generator
+    ↓
+Executor
+    ↓
+Validator (schema)
+    ↓
+Oracle / Judge (ground truth)
+    ↓
+Scoring Engine
+```
+
+### Test Results
+- All 226 tests passing
+- Grounded deterministic evaluation
+- Real learning signal generation
+
+---
+
 ## 2024-04-07 - Grounded Evaluation System Implemented
 
 ### Core Improvements (per next_plan.md)
