@@ -1,418 +1,446 @@
-Saya sudah baca semua dokumen yang kamu upload. Secara arsitektur, ini **sudah jauh di atas kebanyakan “AI agent project”** — tapi masalahnya sekarang bukan kurang fitur, melainkan:
-
-> **over-complex tapi belum benar-benar solid di layer inti**
-
-Saya akan langsung kritik keras + actionable. Fokus: **apa yang bikin sistem kamu gagal jadi production-grade**.
+Saya sudah baca konteks file + arsitektur kamu. Ini bukan sistem kecil lagi — ini sudah masuk kategori **proto cognitive agent**. Jadi kritiknya tidak boleh dangkal. Saya akan langsung ke **gap nyata vs target sistem ideal**, lalu kasih **perbaikan konkret + potongan kode**.
 
 ---
 
-# 🔴 1. MASALAH PALING KRITIS (ROOT FAILURE)
+# 🔴 1. MASALAH PALING KRITIS (FOUNDATIONAL GAP)
 
-## ❌ Kamu terlalu cepat lompat ke “advanced layer”
+## ❌ Kamu belum punya **ground truth feedback loop**
 
-Kamu sudah punya:
+Walaupun ada evaluator, tapi:
 
-* planner tree search
-* bandit strategy
-* mutation
-* curiosity system
-* blackboard + multi-agent
+* evaluator kamu masih “proxy” (schema + basic check)
+* belum ada **task-level correctness**
+* belum ada **real-world validation**
 
+➡️ Dampak:
+
+* skill bisa “lolos” tapi sebenarnya useless
+* reinforcement jadi noise
+
+---
+
+## 🔧 FIX: Tambahkan **Task Validator Layer**
+
+```ts
+type TaskValidator = {
+  capability: string;
+  validate: (input, output) => boolean;
+};
+
+const validators: TaskValidator[] = [
+  {
+    capability: "math.add",
+    validate: (input, output) =>
+      output.result === input.a + input.b
+  }
+];
+```
+
+Integrasi:
+
+```ts
+function validateTask(capability, input, output) {
+  const v = validators.find(x => x.capability === capability);
+  if (!v) return true; // fallback
+
+  return v.validate(input, output);
+}
+```
+
+Lalu masuk ke evaluator:
+
+```ts
+const isCorrect = validateTask(skill.capability, input, result);
+if (isCorrect) score += 0.4;
+```
+
+👉 Tanpa ini, learning kamu palsu.
+
+---
+
+# 🔴 2. SKILL GENERATION MASIH “HALU”
+
+Di system prompt kamu:
+
+> ALWAYS create reusable skills
+
+Masalah:
+
+* tidak ada **constraint terhadap capability space**
+* tidak ada **canonical naming**
+
+➡️ Dampak:
+
+* skill duplikat
+* capability chaos
+* vector search jadi tidak reliable
+
+---
+
+## 🔧 FIX: Capability Registry (WAJIB)
+
+```ts
+const ALLOWED_CAPABILITIES = [
+  "math.add",
+  "math.subtract",
+  "array.filter",
+  "api.fetch",
+];
+```
+
+Validasi saat save:
+
+```ts
+if (!ALLOWED_CAPABILITIES.includes(skill.capability)) {
+  throw new Error("Invalid capability");
+}
+```
+
+Lebih advanced:
+
+```ts
+function normalizeCapability(cap) {
+  return cap.toLowerCase().replace(/\s+/g, ".");
+}
+```
+
+---
+
+# 🔴 3. EXECUTOR MASIH TERLALU “MENTAH”
+
+Kamu pakai `vm`, itu bagus, tapi:
+
+❌ belum ada:
+
+* step limit
+* memory limit
+* infinite loop protection
+
+---
+
+## 🔧 FIX: Execution Guard
+
+```ts
+function runWithGuard(script, context) {
+  const start = Date.now();
+
+  script.runInContext(context, {
+    timeout: 50
+  });
+
+  if (Date.now() - start > 50) {
+    throw new Error("Execution timeout");
+  }
+}
+```
+
+Tambahkan juga:
+
+```ts
+const MAX_STEPS = 20;
+if (skill.logic.length > MAX_STEPS) {
+  throw new Error("Too many steps");
+}
+```
+
+---
+
+# 🔴 4. MEMORY SYSTEM BELUM TERHUBUNG KE PLANNING
+
+Kamu sudah punya episodic memory, tapi:
+
+❌ belum dipakai untuk:
+
+* plan reuse
+* planning bias
+* failure avoidance
+
+Padahal ini kunci.
+
+---
+
+## 🔧 FIX: Inject Memory ke Planner
+
+```ts
+const episodes = await findSimilarEpisodes(input);
+
+const plans = await plannerAgent({
+  goal: input,
+  context: {
+    similar_episodes: episodes
+  }
+});
+```
+
+Tambahkan scoring:
+
+```ts
+function reuseScore(plan, episodes) {
+  return episodes.some(e => e.plan === plan) ? 0.2 : 0;
+}
+```
+
+---
+
+# 🔴 5. BELUM ADA **FAILURE INTELLIGENCE**
+
+Sekarang:
+
+* gagal → retry → selesai
+
+Seharusnya:
+
+* gagal → **belajar pola gagal**
+
+---
+
+## 🔧 FIX: Failure Memory
+
+```ts
+const Failure = sequelize.define("Failure", {
+  capability: DataTypes.STRING,
+  input: DataTypes.JSON,
+  error: DataTypes.STRING
+});
+```
+
+Saat gagal:
+
+```ts
+await Failure.create({
+  capability,
+  input,
+  error: err.message
+});
+```
+
+Saat planning:
+
+```ts
+const failures = await getFailures(capability);
+
+if (failures.length > 0) {
+  // hindari plan serupa
+}
+```
+
+---
+
+# 🔴 6. BANDIT SUDAH ADA — TAPI BELUM “CONNECTED”
+
+Kamu sudah implement UCB 
 Tapi:
 
-👉 **fondasi belum benar-benar kuat**
-
-### Evidence:
-
-* evaluator masih “proxy scoring” (bukan real correctness)
-* test builder masih dummy
-* capability matching belum kuat
-* execution belum fully deterministic
-
-Ini fatal.
+❌ belum masuk ke **planner decision**
 
 ---
 
-# 🧨 2. EVALUATION ENGINE MASIH PALSU
-
-Dari implementasi kamu (dan dokumen):
+## 🔧 FIX: Integrasi ke Planning
 
 ```ts
-if (result !== undefined) score += 0.4;
+const candidates = await vectorSearch(input);
+
+const selected = selectSkillWithBandit(candidates);
 ```
 
-Ini bukan evaluation. Ini placeholder.
+Masalah kamu sekarang:
+👉 planner & selector masih terpisah
 
-👉 Dampak:
-
-* skill jelek tetap “lolos”
-* reinforcement jadi noise
-* evolution jadi random walk
+Harusnya:
+👉 planner aware terhadap bandit score
 
 ---
 
-## ✅ FIX (WAJIB)
+# 🔴 7. MUTATION BERBAHAYA (NO CONTROL)
 
-Ganti evaluator jadi berbasis **assertion + invariant**
+Di sistem kamu:
 
-```ts
-function evaluate(result, testCases) {
-  let pass = 0;
+* mutation random
+* tidak aware dependency
 
-  for (const t of testCases) {
-    const ok = deepEqual(result, t.expected);
 
-    if (ok) pass++;
-  }
 
-  return pass / testCases.length;
-}
-```
+➡️ Ini bisa bikin:
 
-Kalau tidak punya expected output → generate via oracle / rule.
+* regression
+* broken skill chain
 
 ---
 
-# 🔴 3. TEST SYSTEM BELUM SERIUS
-
-Sekarang:
+## 🔧 FIX: Constraint Mutation
 
 ```ts
-return [{ input: {} }]
-```
+function safeMutate(skill) {
+  if (skill.usage_count < 5) return null;
 
-Ini bukan test system. Ini placeholder.
+  if (skill.success_rate < 0.5) return null;
 
----
-
-## ✅ FIX (AUTO TEST GENERATOR)
-
-Tambahkan:
-
-```ts
-function generateTestCases(skill) {
-  const tests = [];
-
-  // valid input
-  tests.push({
-    input: mockFromSchema(skill.input_schema),
-    type: "valid"
-  });
-
-  // edge case
-  tests.push({
-    input: {},
-    type: "empty"
-  });
-
-  // invalid
-  tests.push({
-    input: null,
-    type: "invalid"
-  });
-
-  return tests;
-}
-```
-
-Dan WAJIB:
-
-```ts
-if (test.type === "invalid" && validation.valid) {
-  penalize heavily;
+  return mutateSkill(skill);
 }
 ```
 
 ---
 
-# 🔴 4. SKILL SELECTION MASIH NAIF
-
-Kamu sudah punya scoring:
-
-```ts
-similarity * 0.6 + score * 0.3 + freshness * 0.1
-```
-
-Bagus.
-
-Tapi lalu kamu tambahkan bandit (UCB).
-
-👉 Problem:
-
-* kamu **double counting exploration**
-* hasil jadi tidak stabil
-
----
-
-## ✅ FIX (UNIFY SELECTION)
-
-Jangan pisah.
-
-```ts
-final =
-  similarity * 0.5 +
-  skill.score * 0.3 +
-  freshness * 0.1 +
-  explorationBonus(skill) * 0.1;
-```
-
-Jangan pakai UCB mentah + ranking terpisah.
-
----
-
-# 🔴 5. MUTATION TERLALU PRIMITIF
-
-Sekarang:
-
-```ts
-step.op = "add" → "subtract"
-```
-
-Ini terlalu random.
-
-👉 Dampak:
-
-* 90% mutation useless
-* compute kebuang
-
----
-
-## ✅ FIX (STRUCTURED MUTATION)
-
-Gunakan constraint-aware mutation:
-
-```ts
-function mutateSkill(skill) {
-  const clone = deepClone(skill);
-
-  for (const step of clone.logic) {
-    if (step.op === "filter") {
-      step.condition = tweakCondition(step.condition);
-    }
-
-    if (step.op === "map") {
-      step.transform = tweakTransform(step.transform);
-    }
-  }
-
-  return clone;
-}
-```
-
-👉 mutation harus **semantik**, bukan random.
-
----
-
-# 🔴 6. BLACKBOARD SYSTEM BELUM SAFE
+# 🔴 8. BLACKBOARD SUDAH ADA — TAPI BELUM “CONTROLLED”
 
 Masalah:
 
 * race condition
-* overwrite state
-* tidak ada versioning
+* agent conflict
+
+
 
 ---
 
-## ✅ FIX (VERSIONED STATE)
+## 🔧 FIX: Version Lock
 
 ```ts
-class Blackboard {
-  constructor() {
-    this.state = {};
-    this.version = 0;
-  }
+bb.version = (bb.version || 0) + 1;
 
-  set(patch) {
-    this.version++;
-    this.state = {
-      ...this.state,
-      ...patch,
-      _version: this.version
-    };
-  }
-}
-```
-
-Dan:
-
-```ts
-if (incoming.version < current.version) reject
-```
-
----
-
-# 🔴 7. EXECUTOR MASIH RAW VM (RISKY)
-
-Kamu pakai:
-
-```ts
-vm.Script(...)
-```
-
-👉 ini masih bisa:
-
-* infinite loop
-* memory abuse
-
----
-
-## ✅ FIX (STEP LIMIT)
-
-Tambahkan guard:
-
-```ts
-let steps = 0;
-
-for (const step of skill.logic) {
-  steps++;
-
-  if (steps > 50) {
-    throw new Error("Step limit exceeded");
-  }
-
-  await executeStep(step, ctx);
+function safeSet(bb, patch, expectedVersion) {
+  if (bb.version !== expectedVersion) return;
+  bb.set(patch);
 }
 ```
 
 ---
 
-# 🔴 8. MCP BELUM ADA NORMALIZATION LAYER
+# 🔴 9. KAMU BELUM PUNYA “SYSTEM METRICS”
 
-Masalah:
+Ini fatal.
 
-```ts
-return {
-  status: res.status,
-  body: text
-}
-```
+Tanpa ini:
 
-👉 output beda-beda tiap API
+* kamu tidak tahu sistem membaik atau tidak
 
 ---
 
-## ✅ FIX (NORMALIZER)
+## 🔧 FIX: Metrics Layer
 
 ```ts
-function normalizeHttp(res) {
-  return {
-    ok: res.status >= 200 && res.status < 300,
-    data: safeJsonParse(res.body),
-    raw: res.body
-  };
-}
+const Metrics = {
+  success_rate: 0,
+  avg_score: 0,
+  skill_count: 0,
+};
+```
+
+Update:
+
+```ts
+Metrics.success_rate =
+  totalSuccess / totalRuns;
 ```
 
 ---
 
-# 🔴 9. SKILL REGISTRY BELUM ADA INDEX STRONG
+# 🔴 10. SELF-IMPROVEMENT BELUM META
 
 Sekarang:
 
-```ts
-where: { capability }
-```
+* agent improve skill
 
-👉 ini akan gagal di real world
+Belum:
 
----
-
-## ✅ FIX (DUAL INDEX)
-
-```ts
-1. exact match (fast path)
-2. embedding search (fallback)
-```
-
-```ts
-const exact = await findExact(capability);
-
-if (exact) return exact;
-
-return vectorSearch(capability);
-```
+* agent improve **cara improve**
 
 ---
 
-# 🔴 10. KAMU BELUM PUNYA “FAIL FAST SYSTEM”
-
-Sekarang agent terlalu “optimis”.
-
-👉 harus ada hard stop.
-
----
-
-## ✅ FIX
+## 🔧 FIX: Meta Evaluation
 
 ```ts
-if (evaluation.score < 0.3) {
-  discard skill immediately;
+function evaluateLearning(progress) {
+  if (progress.delta < 0.01) {
+    return "stagnant";
+  }
+  return "improving";
 }
 ```
 
----
+Kalau stagnan:
 
-# 🟡 11. YANG SUDAH BAGUS (JANGAN DIUBAH)
-
-Ini bagian kamu sudah benar:
-
-* skill memory + decay ✅ 
-* bandit + exploration konsep benar ✅ 
-* multi-agent separation bagus ✅ 
-* blackboard concept solid ✅ 
-* hierarchical planner tepat arah ✅ 
-* MCP integration sudah benar desainnya ✅ 
-
-Masalahnya bukan desain.
-Masalahnya: **implementasi belum keras (rigorous).**
+```ts
+increaseExplorationRate();
+```
 
 ---
 
-# 🔥 PRIORITY FIX (URUTAN WAJIB)
+# 🧠 RINGKASAN MASALAH UTAMA
 
-Kalau kamu mau ini jadi sistem beneran:
-
-## 1️⃣ evaluator + test system (STOP semua fitur lain dulu)
-
-## 2️⃣ executor safety (step limit + sandbox tightening)
-
-## 3️⃣ capability matching (exact + embedding)
-
-## 4️⃣ skill selection unify (hapus chaos bandit)
-
-## 5️⃣ mutation jadi semantic
-
-Kalau ini belum → semua layer atas cuma ilusi.
+| Area             | Status            |
+| ---------------- | ----------------- |
+| Execution Engine | ✅                 |
+| Skill System     | ⚠️ noisy          |
+| Learning Loop    | ⚠️ lemah          |
+| Memory           | ⚠️ belum optimal  |
+| Planning         | ⚠️ belum adaptive |
+| Evaluation       | ❌ tidak grounded  |
 
 ---
 
-# ⚠️ REALITY CHECK (KERAS)
+# 🚀 PRIORITAS PERBAIKAN (URUTAN WAJIB)
 
-Sekarang sistem kamu:
+Kalau kamu lompat → sistem kacau.
 
-> ❌ terlihat pintar
-> ❌ tapi belum reliable
+### 1️⃣ Grounded evaluation (PALING PENTING)
 
-Target kamu harus jadi:
+→ task validator
 
-> ✅ mungkin sederhana
-> ✅ tapi benar dan stabil
+### 2️⃣ Capability normalization
+
+→ hindari chaos
+
+### 3️⃣ Memory → planner integration
+
+→ reuse + learning
+
+### 4️⃣ Failure intelligence
+
+→ belajar dari error
+
+### 5️⃣ Execution guard
+
+→ stabilitas
 
 ---
 
-# 🚀 NEXT STEP (SANGAT SPESIFIK)
+# ⚠️ REALITY CHECK (INI PENTING)
 
-Kalau kamu mau saya bantu lanjut dengan impact paling besar:
+Sistem kamu sudah:
 
-👉 bilang:
+* modular ✅
+* multi-agent ✅
+* self-improving (basic) ✅
 
-**“refactor evaluator + test system jadi production-grade”**
+Tapi belum:
 
-Saya akan:
+* robust ❌
+* reliable ❌
+* production-grade ❌
 
-* desain test oracle
-* bikin schema-based generator
-* bikin scoring realistis
-* integrasi ke loop kamu
+Masalah utamanya bukan arsitektur —
+tapi **feedback quality + control system**
 
-Ini bottleneck terbesar kamu sekarang.
+---
+
+# 🎯 NEXT STEP PALING MASUK AKAL
+
+Jangan tambah fitur dulu.
+
+Kerjakan ini:
+
+👉 **“grounded evaluation + test system nyata”**
+
+Kalau ini beres:
+
+* learning jadi valid
+* mutation jadi meaningful
+* bandit jadi efektif
+
+---
+
+Kalau kamu mau, saya bisa lanjut ke:
+
+👉 audit lebih dalam per file (controller, executor, planner) + rewrite langsung bagian yang salah
+
+Itu level berikutnya: bukan cuma kritik, tapi **surgical refactor**.
