@@ -218,7 +218,9 @@ export function mutateSkill(skill, seed = null) {
   const step = clone.logic[idx];
 
   if (step.op === "add") {
-    step.op = rng() > 0.5 ? "add" : "subtract";
+    step.op = "subtract";
+  } else if (step.op === "subtract") {
+    step.op = "add";
   }
 
   return clone;

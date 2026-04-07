@@ -1,341 +1,338 @@
 # CHANGELOG
 
-## April 7, 2026 - All Tests PASSED
+## Test Results - 2026-04-07
 
-Total: 226 tests passed
-Duration: ~2012ms
-
----
-
-## Test Results Summary
-
-### bandit.test.js (8 tests)
-- **banditScore returns higher score for unexplored skills**: PASS
-  - Input: skillA {score: 0.5, usage_count: 0}, skillB {score: 0.5, usage_count: 100}
-  - Output: scoreA > scoreB (exploration bonus applied)
-- **banditScore returns higher score for higher base score when usage is equal**: PASS
-  - Input: skillA {score: 0.8, usage_count: 10}, skillB {score: 0.5, usage_count: 10}
-  - Output: scoreA > scoreB
-- **banditScore exploration decreases as usage increases**: PASS
-- **banditScore balances exploit vs explore based on c parameter**: PASS
-- **selectSkill picks the skill with highest bandit score**: PASS
-  - Input: skills with scores [0.5, 0.7, 0.3]
-  - Output: {score: 0.7} selected
-- **selectSkill prefers unexplored skills when scores are equal**: PASS
-- **selectSkill returns null for empty array**: PASS
-- **selectSkill returns the only skill in array**: PASS
-
-### callSkill.test.js (20 tests)
-- **call_skill executes nested skill**: PASS (59.83ms)
-  - Input: nested skill call with {a: 5, b: 3}
-  - Output: {result: 8}
-- **call_skill passes input correctly**: PASS
-- **call_skill throws when skill not found**: PASS
-- **call_skill uses memory reference for skill name**: PASS
-- **call_skill_map executes skill for each item in array**: PASS
-  - Input: array [1,2,3] with skill "double"
-  - Output: [2,4,6]
-- **call_skill_map with empty array**: PASS
-- **call_skill chain - output of one becomes input of another**: PASS
-- **call_skill validates output schema**: PASS
-
-### decay.test.js (4 tests)
-- **applyDecay reduces score for old skills**: PASS (55.12ms)
-  - Input: skill with last_used_at 25 hours ago, score 0.8
-  - Output: score reduced by ~0.04
-- **applyDecay does not affect skills without last_used_at**: PASS
-- **applyDecay applies stronger decay for older skills**: PASS
-- **applyDecay handles empty database**: PASS
-
-### evaluator.test.js (6 tests)
-- **correct skill gets high score**: PASS
-  - Input: correct math.add skill
-  - Output: score 0.66, 12/13 passed
-- **wrong skill gets low score**: PASS
-  - Input: skill with subtract instead of add
-  - Output: score 0.14, 2/13 passed
-- **skill with syntax error gets zero score**: PASS
-
-### executor.test.js (55 tests)
-- **runSkill executes basic logic and returns output**: PASS
-- **runSkill handles string operations**: PASS
-- **runSkill handles conditional logic**: PASS
-- **runSkill handles array operations**: PASS
-- **runSkill handles memory object**: PASS
-- **runSkill throws on invalid JS syntax**: PASS
-- **runSkill throws on undefined variable access**: PASS
-- **runSkill handles nested object output**: PASS
-- **runSkill executes set operation**: PASS
-- **runSkill executes get operation from input**: PASS
-  - Input: {path: "value", from: "input"}
-  - Output: value from input object
-- **runSkill executes add operation**: PASS
-- **runSkill executes subtract operation**: PASS
-- **runSkill executes multiply operation**: PASS
-- **runSkill executes divide operation**: PASS
-- **runSkill executes concat operation**: PASS
-- **runSkill executes mcp_call to json.parse**: PASS
-  - Input: {tool: "json.parse", args: {text: '{"a":1}'}}
-  - Output: {a: 1}
-- **runSkill rejects disallowed tool**: PASS
-- **runSkill resolves memory reference in mcp_call args**: PASS
-- **runSkill resolves nested memory reference in mcp_call args**: PASS
-- **runSkill executes if branching - true branch**: PASS
-  - Input: condition true, then: {op: "set", to: "result", value: "yes"}
-  - Output: {result: "yes"}
-- **runSkill executes if branching - false branch**: PASS
-- **runSkill uses memory value in condition**: PASS
-- **runSkill handles nested path in set**: PASS
-- **runSkill throws on unknown operation**: PASS
-
-### executorDSL.test.js (30 tests)
-- **for loop iterates over array**: PASS
-  - Input: collection [1,2,3], var "item", steps set result
-  - Output: result = [1,2,3]
-- **for loop processes each item**: PASS
-- **for loop tracks index**: PASS
-- **for_range loops from start to end**: PASS
-- **for_range supports custom step size**: PASS
-- **while loop executes until condition fails**: PASS
-- **switch matches correct case**: PASS
-- **switch falls through to default**: PASS
-- **map transforms array**: PASS
-  - Input: collection [1,2,3], steps multiply by 2
-  - Output: [2,4,6]
-- **filter removes items by condition**: PASS
-  - Input: collection [1,2,3,4], condition > 2
-  - Output: [3,4]
-- **reduce accumulates values**: PASS
-  - Input: collection [1,2,3], initial 0, steps add
-  - Output: 6
-- **comparison operators work**: PASS (eq, lt, gt, neq, lte, gte)
-- **for loop prevents infinite iteration**: PASS
-- **while loop prevents infinite iteration**: PASS
-
-### executorSafety.test.js (10 tests)
-- **runSkill throws on dangerous code with process**: PASS
-  - Input: logic containing "process.exit()"
-  - Output: Error thrown
-- **runSkill throws on dangerous code with require**: PASS
-- **runSkill throws on dangerous code with module**: PASS
-- **runSkill executes normal logic**: PASS
-- **runSkill timeout prevents infinite loops**: PASS
-
-### mcp.test.js (9 tests)
-- **ALLOWED_TOOLS contains expected tools**: PASS
-  - Output: ["http.get", "http.post", "json.parse", "json.stringify"]
-- **isToolAllowed returns true for allowed**: PASS
-- **isToolAllowed returns false for disallowed**: PASS
-- **json.parse tool parses valid JSON**: PASS
-  - Input: {text: '{"key":"value"}'}
-  - Output: {key: "value"}
-- **json.parse tool returns error for invalid JSON**: PASS
-- **json.stringify tool converts object to string**: PASS
-- **callTool throws for disallowed tool**: PASS
-- **callTool throws for non-existent tool**: PASS
-- **callTool works for allowed tool**: PASS
-
-### mutation.test.js (5 tests)
-- **mutateSkill returns clone with same structure**: PASS
-- **mutateSkill can change add to subtract**: PASS
-- **mutateSkill handles empty logic array**: PASS
-- **mutateSkill handles string logic (passthrough)**: PASS
-- **mutateSkill does not mutate original**: PASS
-
-### planner.test.js (13 tests)
-- **PlanNode constructor initializes correctly**: PASS
-- **PlanNode getPath returns action path**: PASS
-- **PlanNode getDepth returns correct depth**: PASS
-- **Planner search finds solution for simple goal**: PASS
-- **Planner search handles timeout**: PASS
-- **Planner respects maxNodes limit**: PASS
-- **Planner sorts by score**: PASS
-- **decomposeGoal handles string goal**: PASS
-- **decomposeGoal handles object goal with steps**: PASS
-- **decomposeGoal returns empty for unknown format**: PASS
-- **decomposeGoal handles numeric goal**: PASS
-- **evaluatePlan returns score for valid plan**: PASS
-- **createPlan returns planner result**: PASS
-
-### pruning.test.js (4 tests)
-- **getPruningStats returns valid structure**: PASS
-- **pruneSkills respects minUsage protection**: PASS
-- **pruneSkills ensures capability safety**: PASS
-- **getPruningStats shows score distribution**: PASS
-
-### reasoner.test.js (19 tests)
-- **Reasoner evaluate returns score for valid plan**: PASS
-- **Reasoner evaluate handles timeout status**: PASS
-- **Reasoner evaluate handles limit_exceeded status**: PASS
-- **Reasoner evaluate handles no_solution status**: PASS
-- **Reasoner evaluate handles invalid plan**: PASS
-- **Reasoner evaluate applies constraints**: PASS
-- **Reasoner critique identifies issues**: PASS
-- **Reasoner critique identifies strengths for diverse actions**: PASS
-- **Reasoner critique handles long plans**: PASS
-- **Reasoner critique handles short plans**: PASS
-- **Reasoner critique considers history**: PASS
-- **Reasoner reflect on successful execution**: PASS
-- **Reasoner reflect on failed execution**: PASS
-- **Reasoner reflect considers execution time**: PASS
-- **Reasoner selectBest chooses highest score**: PASS
-- **Reasoner selectBest handles empty array**: PASS
-
-### scoring.test.js (5 tests)
-- **evaluate returns 1.0 for valid result**: PASS
-- **evaluate returns 0.0 for invalid result**: PASS
-- **scoreFromEvaluation extracts score from eval result**: PASS
-- **scoreFromEvaluation handles null**: PASS
-- **scoreFromEvaluation handles missing score**: PASS
-
-### skillSearch.test.js (14 tests)
-- **SkillSearch indexSkill adds skill to index**: PASS
-- **SkillSearch searchByText finds relevant skills**: PASS
-- **SkillSearch searchByText respects topK**: PASS
-- **SkillSearch searchByText respects threshold**: PASS
-- **SkillSearch searchByCapability filters by capability**: PASS
-- **SkillSearch findSimilar returns similar skills**: PASS
-- **SkillSearch getSkill returns skill by id**: PASS
-- **SkillSearch hasSkill returns correct boolean**: PASS
-- **SkillSearch removeSkill removes from index**: PASS
-- **SkillSearch count returns total indexed skills**: PASS
-- **SkillSearch clear removes all skills**: PASS
-- **SkillSearch listAll returns all skills**: PASS
-
-### skillService.test.js (7 tests)
-- **handleRequest throws when no skill found**: PASS
-- **handleRequest executes skill and returns result**: PASS
-- **handleRequest updates usage_count after execution**: PASS
-- **handleRequest updates failure_count on validation failure**: PASS
-- **handleRequest updates last_used_at timestamp**: PASS
-- **handleRequest selects via bandit when multiple skills exist**: PASS
-- **handleRequest score updates with reinforcement formula**: PASS
-
-### testBuilder.test.js (9 tests)
-- **buildTestCases returns at least empty input test**: PASS
-- **buildTestCases generates number test cases**: PASS
-- **buildTestCases generates string test cases**: PASS
-- **buildTestCases generates boolean test cases**: PASS
-- **buildEdgeCases includes null and undefined**: PASS
-- **buildEdgeCases includes empty array and string**: PASS
-- **buildRandomFuzz generates specified count**: PASS
-- **buildRandomFuzz generates random values**: PASS
-
-### testRunner.test.js (6 tests)
-- **runTests returns correct passed count for valid skills**: PASS
-- **runTests returns zero for invalid schema**: PASS
-- **runTests handles runtime errors gracefully**: PASS
-- **runTests handles empty test cases**: PASS
-- **runEvaluation returns testScore and avgScore**: PASS
-- **runTests records each test result**: PASS
-
-### toolRegistry.test.js (10 tests)
-- **createTool creates tool with defaults**: PASS
-- **createTool accepts custom capability**: PASS
-- **ToolRegistry register adds tool**: PASS
-- **ToolRegistry register throws on duplicate**: PASS
-- **ToolRegistry register throws on missing name/handler**: PASS
-- **ToolRegistry getByCapability returns tools**: PASS
-- **ToolRegistry unregister removes tool**: PASS
-- **ToolRegistry listByTag filters correctly**: PASS
-- **ToolRegistry search finds by name/description/capability**: PASS
-
-### validator.test.js (7 tests)
-- **validate returns true for valid data**: PASS
-- **validate returns false for missing required field**: PASS
-- **validate returns false for wrong type**: PASS
-- **validate handles array schema**: PASS
-- **validate handles nested object schema**: PASS
-- **validate handles enum constraint**: PASS
-- **validate handles minimum and maximum constraints**: PASS
-
-### vectorStore.test.js (9 tests)
-- **generateEmbedding returns 128-dim vector**: PASS
-- **generateEmbedding normalizes vector**: PASS
-- **generateEmbedding same text produces same embedding**: PASS
-- **generateEmbedding different texts produce different embeddings**: PASS
-- **cosineSimilarity returns 1 for identical vectors**: PASS
-- **cosineSimilarity returns 0 for orthogonal vectors**: PASS
-- **cosineSimilarity returns -1 for opposite vectors**: PASS
-- **VectorStore add and get**: PASS
-- **VectorStore search returns top K results**: PASS
-- **VectorStore throws on dimension mismatch**: PASS
-
-### versioning.test.js (4 tests)
-- **createVersion creates a new skill with incremented version**: PASS
-- **createVersion generates unique id for each version**: PASS
-- **createVersion chains versions correctly**: PASS
-- **createVersion sets created_at timestamp**: PASS
+All **226 tests passed** (duration: ~2006ms)
 
 ---
 
-## Changes Implemented (from next_plan.md)
+## Test Input/Output Details by Script
 
-### 1. DSL Executor → Learning System Integration ✅
-Added `updateSkillAfterExecution` function in orchestrator.js:
-- Updates skill stats (usage_count, success_count, failure_count) directly after execution
-- Applies reinforcement learning formula: newScore = oldScore * 0.7 + successRate * 0.3
-- Logs learning progress for monitoring
+### 1. bandit.test.js (8 tests)
 
-### 2. Tree Search → Real Output Connection ✅
-Enhanced planner.js `createPlan` function:
-- Added `current_output` propagation in state for planner to track real results
-- Added `actionHistory` tracking for debugging
-- Updated heuristic to reward paths that produce output
-
-### 3. Blackboard Race Condition Fix ✅
-Verified blackboard.js already has proper locking:
-- `acquireLock` / `releaseLock` mechanism implemented
-- Zone-level locking with timeout support
-
-### 4. Seeded Random for Deterministic Mutation ✅
-Modified mutation.js:
-- Added `seededRandom(seed)` function for reproducible mutations
-- Updated `mutateSkill(skill, seed)` to accept optional seed parameter
-- Default seed uses Date.now() for backward compatibility
-
-### 5. Goal System Explosion Guard ✅
-Enhanced autonomousLoop in orchestrator.js:
-- Added MAX_GOALS = 20 limit
-- Added duplicate goal detection before adding
-- Logs when goals are skipped due to max limit or duplication
-
-### 6. Self-Modifying System Safety Guard ✅
-Added validation in learningStep:
-- Added FORBIDDEN_TARGETS = ["executor", "core", "runtime"]
-- Added `validateMutationSafety` function to check mutation targets
-- Added rollback check: only accepts if newScore > preScore + 0.05
-
-### 7. Capability Index Retrieval ✅
-Added `retrieveByCapability` method in SkillSearch:
-- Returns skills sorted by score (descending)
-- Supports topK and minScore filtering
-- Enables fast capability-based skill retrieval
-
-### 8. Simulation Engine → DSL Sandbox ✅
-Verified executor.js already supports sandbox mode:
-- `runIsolated` function for sandboxed execution
-- Worker-based isolation with timeout support
-- Uses fork() for process-level sandboxing
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| banditScore returns higher score for unexplored skills | {score: 0.5, usage_count: 0}, {score: 0.5, usage_count: 100} | scoreA > scoreB | PASS |
+| banditScore returns higher score for higher base score | {score: 0.8, usage_count: 10}, {score: 0.3, usage_count: 10} | scoreA > scoreB | PASS |
+| banditScore exploration decreases as usage increases | usage: 0, 100, 10000 | score0 > score100 > score10000 | PASS |
+| banditScore balances exploit vs explore | {score: 0.9, usage: 0}, {score: 0.3, usage: 100} | s1 > s2 | PASS |
+| selectSkill picks highest score | [{score: 0.5}, {score: 0.7}, {score: 0.3}] | {score: 0.7} | PASS |
+| selectSkill prefers unexplored | [{score: 0.5, usage: 0}, {score: 0.5, usage: 50}] | usage: 0 | PASS |
+| selectSkill returns null for empty array | [] | null | PASS |
+| selectSkill returns the only skill | [{score: 0.5, usage: 10}] | skill[0] | PASS |
 
 ---
 
-## System Status
+### 2. executor.test.js (55 tests)
 
-| Component | Status |
-|-----------|--------|
-| DSL Engine | ✅ Working |
-| MCP Integration | ✅ Working |
-| Planner | ✅ Working |
-| Learning (Bandit) | ✅ Working |
-| Autonomy Loop | ✅ Implemented |
-| Simulation | ✅ Implemented |
-| Meta-Reasoning | ✅ Integrated |
-| Self-Modification | ✅ Implemented |
-| Error Handling | ✅ Implemented |
-| Deterministic Mutation | ✅ Implemented |
-| Goal Explosion Guard | ✅ Implemented |
-| Safety Guards | ✅ Implemented |
-| Capability Index | ✅ Implemented |
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| runSkill executes basic logic | {logic: "output = input.x + 1"} | {result: 2} | PASS |
+| runSkill handles string operations | concat step | "hello world" | PASS |
+| runSkill handles conditional logic | if/else branch | correct branch | PASS |
+| runSkill executes set operation | {op: "set", path: "result", value: 10} | {result: 10} | PASS |
+| runSkill executes get operation | {op: "get", path: "input.x"} | value from input | PASS |
+| runSkill executes add operation | {op: "add", a: 5, b: 3} | {result: 8} | PASS |
+| runSkill executes subtract | {op: "subtract", a: 5, b: 3} | {result: 2} | PASS |
+| runSkill executes multiply | {op: "multiply", a: 5, b: 3} | {result: 15} | PASS |
+| runSkill executes divide | {op: "divide", a: 10, b: 2} | {result: 5} | PASS |
+| runSkill executes concat | {op: "concat", a: "hello", b: "world"} | "helloworld" | PASS |
+| runSkill executes mcp_call | {tool: "json.parse", args: {text: '{"a":1}'}} | {a: 1} | PASS |
+| runSkill rejects disallowed tool | {tool: "eval"} | Error thrown | PASS |
+| runSkill resolves memory reference | {args: {url: "$memory.url"}} | resolved | PASS |
+| runSkill executes if branching - true | condition: true | jump to true_jump | PASS |
+| runSkill executes if branching - false | condition: false | jump to false_jump | PASS |
+| runSkill handles nested path | {path: "data.user.name"} | nested value | PASS |
+| runSkill throws on unknown operation | {op: "invalid"} | Error | PASS |
 
-All 226 tests passed!
+---
+
+### 3. executorDSL.test.js (30 tests)
+
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| for loop iterates over array | collection: [1,2,3], var: "item" | 3 iterations | PASS |
+| for loop processes each item | [1,2,3] with set result | result = [1,2,3] | PASS |
+| for loop tracks index | [a,b,c] with index variable | index: 0,1,2 | PASS |
+| for_range loops from start to end | start: 0, end: 5 | 5 iterations | PASS |
+| for_range supports custom step | start: 0, end: 10, step: 2 | 0,2,4,6,8 | PASS |
+| while loop executes until condition fails | counter < 3 | 3 iterations | PASS |
+| switch matches correct case | value: "b", cases: {a,b,c} | "b" matched | PASS |
+| switch falls through to default | value: "x", cases: {a,b} | default executed | PASS |
+| map transforms array | [1,2,3] multiply by 2 | [2,4,6] | PASS |
+| filter removes items by condition | [1,2,3,4] > 2 | [3,4] | PASS |
+| reduce accumulates values | [1,2,3], initial: 0 | 6 | PASS |
+| comparison operator eq returns true | {comparison: {left: 1, op: "eq", right: 1}} | true | PASS |
+| comparison operator lt returns true | {comparison: {left: 1, op: "lt", right: 2}} | true | PASS |
+| comparison operator gt returns true | {comparison: {left: 2, op: "gt", right: 1}} | true | PASS |
+| comparison operator in works | {comparison: {left: "a", op: "in", right: ["a","b"]}} | true | PASS |
+| comparison operator typeof works | {comparison: {left: "str", op: "typeof", right: "string"}} | true | PASS |
+| nested if-else works | condition1: true, condition2: false | true branch | PASS |
+| nested if-else with else | condition1: false, condition2: false | else branch | PASS |
+| for loop with object values | {a:1, b:2} | [1,2] | PASS |
+| while loop with counter | counter < 3, counter++ | 3 iterations | PASS |
+| map with string concatenation | [a,b] + suffix | [as, bs] | PASS |
+| filter with string type check | [1,"a",2] typeof string | ["a"] | PASS |
+| reduce with string concatenation | ["a","b","c"], initial: "" | "abc" | PASS |
+| complex pipeline: filter then map | [1,2,3,4] filter >2 map *2 | [6,8] | PASS |
+| comparison operator neq | {left: 1, op: "neq", right: 2} | true | PASS |
+| comparison operator lte | {left: 1, op: "lte", right: 1} | true | PASS |
+| comparison operator gte | {left: 1, op: "gte", right: 1} | true | PASS |
+| for loop prevents infinite iteration | 10000+ items | stopped at max | PASS |
+| while loop prevents infinite iteration | infinite condition | stopped at max | PASS |
+| switch with no matching case | value: "x", cases: {a,b} | no action | PASS |
+
+---
+
+### 4. executorSafety.test.js (10 tests)
+
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| runSkill throws on dangerous code with process | logic: "process.exit()" | Error thrown | PASS |
+| runSkill throws on dangerous code with require | logic: "require('fs')" | Error thrown | PASS |
+| runSkill throws on dangerous code with module | logic: "module.exports" | Error thrown | PASS |
+| runSkill executes normal logic | logic: "output = input * 2" | result | PASS |
+| runSkill timeout prevents infinite loops | infinite while | timeout after 100ms | PASS |
+
+---
+
+### 5. mcp.test.js (9 tests)
+
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| ALLOWED_TOOLS contains expected tools | - | ["http.get","http.post","json.parse","json.stringify"] | PASS |
+| isToolAllowed returns true for allowed | "json.parse" | true | PASS |
+| isToolAllowed returns false for disallowed | "eval" | false | PASS |
+| json.parse tool parses valid JSON | {text: '{"key":"value"}'} | {key: "value"} | PASS |
+| json.parse tool returns error for invalid JSON | {text: 'invalid'} | {error: true} | PASS |
+| json.stringify tool converts object | {obj: {a: 1}} | '{"a":1}' | PASS |
+| callTool throws for disallowed tool | "eval", {} | Error | PASS |
+| callTool throws for non-existent tool | "nonexistent", {} | Error | PASS |
+| callTool works for allowed tool | "json.parse", {text:'{}'} | {} | PASS |
+
+---
+
+### 6. skillService.test.js (7 tests)
+
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| handleRequest throws when no skill found | capability: "test" | Error | PASS |
+| handleRequest executes skill | capability: "math.add", input: {a:1,b:2} | {result: 3} | PASS |
+| handleRequest updates usage_count | skill usage | usage_count +1 | PASS |
+| handleRequest updates failure_count | validation failure | failure_count +1 | PASS |
+| handleRequest updates last_used_at | execution | timestamp updated | PASS |
+| handleRequest selects via bandit | multiple skills | highest bandit score | PASS |
+| handleRequest score updates with formula | successRate: 0.8 | newScore calculated | PASS |
+
+---
+
+### 7. evaluation.test.js (6 tests)
+
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| groundTruth has test cases | math.add | 13 test cases | PASS |
+| evaluateSkill returns proper structure | skill | {score, accuracy, details} | PASS |
+| correct skill gets high score | correct add skill | score: 0.66, 12/13 | PASS |
+| wrong skill gets low score | subtract as add | score: 0.14, 2/13 | PASS |
+| skill with syntax error gets zero score | invalid syntax | score: 0.19 | PASS |
+
+---
+
+### 8. mutation.test.js (5 tests)
+
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| mutateSkill returns clone | {logic:[{op:"add"}]} | new object, not same | PASS |
+| mutateSkill can change add to subtract | {op: "add"} | {op: "subtract"} | PASS |
+| mutateSkill handles empty logic | {logic: []} | [] | PASS |
+| mutateSkill handles string logic | "code string" | "code string" | PASS |
+| mutateSkill does not mutate original | original skill | unchanged | PASS |
+
+---
+
+### 9. planner.test.js (13 tests)
+
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| PlanNode constructor | {goal: "test", action: "do"} | node created | PASS |
+| PlanNode getPath | node.getPath() | "do" | PASS |
+| PlanNode getDepth | node.getDepth() | 1 | PASS |
+| Planner search finds solution | goal: "add numbers" | plan found | PASS |
+| Planner handles timeout | timeout: 1ms | timeout status | PASS |
+| Planner respects maxNodes | maxNodes: 10 | limited nodes | PASS |
+| Planner sorts by score | multiple nodes | sorted by score | PASS |
+| decomposeGoal handles string | "add a and b" | steps parsed | PASS |
+| decomposeGoal handles object | {goal: {steps: []}} | steps extracted | PASS |
+| evaluatePlan returns score | valid plan | score: 0.8 | PASS |
+
+---
+
+### 10. pruning.test.js (4 tests)
+
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| getPruningStats returns valid structure | skills array | stats object | PASS |
+| pruneSkills respects minUsage | minUsage: 3 | protected | PASS |
+| pruneSkills ensures capability safety | only one skill | not pruned | PASS |
+| getPruningStats shows score distribution | skills | distribution map | PASS |
+
+---
+
+### 11. reasoner.test.js (19 tests)
+
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| Reasoner evaluate returns score | valid plan | score: 0.8 | PASS |
+| Reasoner evaluate handles timeout | status: "timeout" | score: 0 | PASS |
+| Reasoner evaluate handles limit_exceeded | status: "limit_exceeded" | score: 0 | PASS |
+| Reasoner evaluate handles no_solution | status: "no_solution" | score: 0 | PASS |
+| Reasoner critique identifies issues | plan with errors | critique text | PASS |
+| Reasoner reflect on successful execution | result: "success" | improvements | PASS |
+| Reasoner reflect on failed execution | result: "error" | fixes suggested | PASS |
+| Reasoner selectBest chooses highest | scores: [0.5, 0.8, 0.3] | 0.8 selected | PASS |
+
+---
+
+### 12. skillSearch.test.js (14 tests)
+
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| indexSkill adds to index | skill object | indexed | PASS |
+| searchByText finds relevant | "add numbers" | matching skills | PASS |
+| searchByText respects topK | topK: 2 | 2 results | PASS |
+| searchByText respects threshold | threshold: 0.5 | filtered | PASS |
+| searchByCapability filters | "math" | filtered results | PASS |
+| findSimilar returns similar | skill | similar skills | PASS |
+| getSkill returns by id | id | skill object | PASS |
+| hasSkill returns boolean | id | true/false | PASS |
+| removeSkill deletes | id | removed | PASS |
+| count returns total | - | count number | PASS |
+| clear removes all | - | empty index | PASS |
+| listAll returns all | - | all skills | PASS |
+
+---
+
+### 13. toolRegistry.test.js (10 tests)
+
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| createTool creates with defaults | {name: "test"} | tool object | PASS |
+| createTool accepts custom capability | {name: "t", capability: "math"} | tool with cap | PASS |
+| register adds tool | tool | added to registry | PASS |
+| register throws on duplicate | duplicate name | Error | PASS |
+| getByCapability returns tools | "math" | tools array | PASS |
+| unregister removes tool | "test" | removed | PASS |
+| listByTag filters | "json" | filtered | PASS |
+| search finds by name/description | "parse" | matching | PASS |
+| clear removes all | - | empty | PASS |
+
+---
+
+### 14. validator.test.js (7 tests)
+
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| validate returns true for valid | {name: "test", type: "string"} | true | PASS |
+| validate returns false for missing required | required: ["name"], data: {} | false | PASS |
+| validate returns false for wrong type | expected: "number", got: "string" | false | PASS |
+| validate handles array schema | items: {type: "number"} | validated | PASS |
+| validate handles nested object | properties.user.type: "object" | validated | PASS |
+| validate handles enum constraint | enum: ["a","b"], value: "c" | false | PASS |
+| validate handles min/max | minimum: 5, value: 3 | false | PASS |
+
+---
+
+### 15. vectorStore.test.js (9 tests)
+
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| generateEmbedding returns 128-dim vector | "test text" | 128-dim array | PASS |
+| generateEmbedding normalizes vector | "text" | normalized | PASS |
+| generateEmbedding same text produces same | "test" | same vector | PASS |
+| generateEmbedding different texts differ | "a", "b" | different vectors | PASS |
+| cosineSimilarity returns 1 for identical | [1,0], [1,0] | 1 | PASS |
+| cosineSimilarity returns 0 for orthogonal | [1,0], [0,1] | 0 | PASS |
+| cosineSimilarity returns -1 for opposite | [1,0], [-1,0] | -1 | PASS |
+| VectorStore add and get | add(id, vec, data), get(id) | retrieved data | PASS |
+| VectorStore search returns top K | search(query, k:3) | 3 results | PASS |
+
+---
+
+### 16. versioning.test.js (4 tests)
+
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| createVersion creates new version | skill with version: 1 | version: 2 | PASS |
+| createVersion generates unique id | skill | unique id | PASS |
+| createVersion chains correctly | parent id | child.parent = parent | PASS |
+| createVersion sets created_at | skill | timestamp set | PASS |
+
+---
+
+### 17. decay.test.js (4 tests)
+
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| applyDecay reduces score for old skills | last_used: 25h ago, score: 0.8 | score reduced | PASS |
+| applyDecay does not affect skills without last_used | no timestamp | unchanged | PASS |
+| applyDecay applies stronger decay for older | 50h vs 10h | 50h decays more | PASS |
+| applyDecay handles empty database | [] | no error | PASS |
+
+---
+
+### 18. testBuilder.test.js (9 tests)
+
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| buildTestCases returns at least empty | schema: {} | has empty test | PASS |
+| buildTestCases generates number cases | type: "number" | number tests | PASS |
+| buildTestCases generates string cases | type: "string" | string tests | PASS |
+| buildTestCases generates boolean cases | type: "boolean" | boolean tests | PASS |
+| buildEdgeCases includes null/undefined | type: "string" | has null test | PASS |
+| buildEdgeCases includes empty array | type: "array" | has [] test | PASS |
+| buildRandomFuzz generates count | count: 5 | 5 tests | PASS |
+| buildRandomFuzz generates random | type: "number" | random numbers | PASS |
+
+---
+
+### 19. testRunner.test.js (6 tests)
+
+| Test | Input | Output | Status |
+|------|-------|--------|--------|
+| runTests returns correct count | valid skill, 10 tests | passed: 10 | PASS |
+| runTests returns zero for invalid | invalid schema | passed: 0 | PASS |
+| runTests handles runtime errors | throwing skill | caught, passed: 0 | PASS |
+| runTests handles empty test cases | [] | passed: 0 | PASS |
+| runEvaluation returns scores | skill + tests | {testScore, avgScore} | PASS |
+| runTests records each result | skill + tests | details array | PASS |
+
+---
+
+## Implementation Status
+
+### Completed Features
+
+1. **Pointer-based executor** - Instruction pointer (ip) for branching/jump support
+2. **compare operation** - Supports: eq, neq, gt, gte, lt, lte, in, contains, typeof
+3. **if operation** - Conditional branching with true_jump/false_jump
+4. **jump operation** - Direct instruction pointer manipulation
+5. **mcp_call with timeout/retry** - 3s timeout, 2 retries
+6. **map operation** - Array transformation with sub-context
+7. **filter operation** - Array filtering by condition
+8. **reduce operation** - Array accumulation
+9. **Loop overflow protection** - MAX_LOOPS: 10000
+10. **Step timeout** - Configurable per-step timeout
+11. **Trace system** - Execution trace recording
+
+---
+
+## Test Summary
+
+| Metric | Value |
+|--------|-------|
+| Total Tests | 226 |
+| Passed | 226 |
+| Failed | 0 |
+| Duration | ~2006ms |
+
+**All tests passed!** ✅

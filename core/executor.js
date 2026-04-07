@@ -911,6 +911,48 @@ async function executeStep(step, frame, input) {
       throw new Error("__CONTINUE__");
     }
 
+    case "compare": {
+      const a = resolveValue(step.a, ctx);
+      const b = resolveValue(step.b, ctx);
+      const op = step.operator || "eq";
+      let result = false;
+      
+      switch (op) {
+        case "eq": case "==": result = a === b; break;
+        case "neq": case "!=": result = a !== b; break;
+        case "gt": case ">": result = a > b; break;
+        case "gte": case ">=": result = a >= b; break;
+        case "lt": case "<": result = a < b; break;
+        case "lte": case "<=": result = a <= b; break;
+      }
+      
+      if (step.to) {
+        setPath(frame.memory, step.to, result);
+        setPath(frame.output, step.to, result);
+      }
+      return;
+    }
+
+    case "if": {
+      const condition = evaluateCondition(step.condition, ctx);
+      const trueJump = step.true_jump;
+      const falseJump = step.false_jump;
+      
+      if (condition && trueJump !== undefined) {
+        return { jump: trueJump };
+      } else if (!condition && falseJump !== undefined) {
+        return { jump: falseJump };
+      }
+      return;
+    }
+
+    case "jump": {
+      if (step.to !== undefined) {
+        return { jump: step.to };
+      }
+      return;
+    }
+
     default:
       throw new Error(`Unknown operation: ${op}`);
   }
@@ -936,7 +978,7 @@ function createFrame() {
 }
 
 /**
- * Run skill with full execution frame
+ * Run skill with pointer-based execution (supports branching, jump, if)
  */
 export async function runSkill(skill, input) {
   if (EXECUTOR_CONFIG.useSandbox && typeof skill.logic === "string") {
@@ -965,38 +1007,54 @@ export async function runSkill(skill, input) {
   // Handle array-based logic (DSL steps)
   if (Array.isArray(logic)) {
     const frame = createFrame();
+    let ip = 0;
+    let loopCounter = 0;
+    const MAX_LOOPS = 10000;
 
-    // Execution loop with limits
-    for (let i = 0; i < logic.length; i++) {
+    // Pointer-based execution loop
+    while (ip < logic.length) {
       // Check step limit
-      if (i >= EXECUTOR_CONFIG.maxSteps) {
+      if (ip >= EXECUTOR_CONFIG.maxSteps) {
         frame.error = new Error(`Max steps exceeded (${EXECUTOR_CONFIG.maxSteps})`);
         break;
       }
 
-      frame.stepIndex = i;
-      const step = logic[i];
+      // Check loop limit to prevent infinite loops
+      if (loopCounter++ > MAX_LOOPS) {
+        frame.error = new Error("Loop overflow protection triggered");
+        break;
+      }
+
+      frame.stepIndex = ip;
+      const step = logic[ip];
 
       // Validate step
       validateStep(step);
 
-      // Schema enforcement between steps (FIX 2.2)
-      if (i > 0 && logic[i - 1]?.output_schema) {
+      // Schema enforcement between steps
+      if (ip > 0 && logic[ip - 1]?.output_schema) {
         if (!validateStepIO(frame.output, step.input_schema)) {
-          throw new Error(`Step IO mismatch at step ${i}`);
+          throw new Error(`Step IO mismatch at step ${ip}`);
         }
       }
 
       try {
         // Execute with timeout and retry
         const execFn = () => executeStep(step, frame, input);
-        await withTimeout(executeWithRetry(execFn), EXECUTOR_CONFIG.stepTimeoutMs);
+        const result = await withTimeout(executeWithRetry(execFn), EXECUTOR_CONFIG.stepTimeoutMs);
+        
+        // Handle jump from if/jump operations
+        if (result?.jump !== undefined) {
+          ip = result.jump;
+        } else {
+          ip++;
+        }
         
         frame.metadata.stepsExecuted++;
 
         // Add to trace
         frame.trace.push({
-          stepIndex: i,
+          stepIndex: ip,
           op: step.op,
           timestamp: Date.now()
         });
@@ -1006,7 +1064,7 @@ export async function runSkill(skill, input) {
         
         // Handle break/continue
         if (err.message === "__BREAK__") break;
-        if (err.message === "__CONTINUE__") continue;
+        if (err.message === "__CONTINUE__") { ip++; continue; }
         
         // Re-throw other errors
         throw err;
@@ -1030,7 +1088,6 @@ export async function runSkill(skill, input) {
     };
 
     // Merge memory into output for accessibility
-    // Always use memory values (they represent the final state after loops/etc)
     if (frame.memory) {
       for (const key of Object.keys(frame.memory)) {
         frame.output[key] = frame.memory[key];
