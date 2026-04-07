@@ -211,6 +211,60 @@ export function mutateSkill(skill) {
   return clone;
 }
 
+export function mutateSkillSafe(skill, performanceHistory = []) {
+  const newSkill = JSON.parse(JSON.stringify(skill));
+
+  if (!newSkill.logic || newSkill.logic.length === 0) return newSkill;
+
+  for (const step of newSkill.logic) {
+    if (step.op === "compare") {
+      const allowed = [">", "<", "=="];
+      const bestOp = pickBestOperator(allowed, performanceHistory);
+      if (bestOp) {
+        step.operator = bestOp;
+      }
+    }
+
+    if (step.op === "add" || step.op === "subtract" || step.op === "multiply" || step.op === "divide") {
+      const operators = ["add", "subtract", "multiply", "divide"];
+      const bestOp = pickBestOperator(operators, performanceHistory);
+      if (bestOp) {
+        step.op = bestOp;
+      }
+    }
+  }
+
+  return newSkill;
+}
+
+function pickBestOperator(allowed, history) {
+  if (!history || history.length === 0) {
+    return allowed[Math.floor(Math.random() * allowed.length)];
+  }
+
+  const scores = {};
+  for (const op of allowed) {
+    scores[op] = 0;
+  }
+
+  for (const record of history) {
+    if (record.success && scores[record.operator] !== undefined) {
+      scores[record.operator] += 1;
+    }
+  }
+
+  let best = allowed[0];
+  let maxScore = -1;
+  for (const op of allowed) {
+    if (scores[op] > maxScore) {
+      maxScore = scores[op];
+      best = op;
+    }
+  }
+
+  return maxScore > 0 ? best : allowed[Math.floor(Math.random() * allowed.length)];
+}
+
 /**
  * Guided mutation - uses critic feedback to determine mutation direction
  * Instead of random mutations, this uses feedback signals to target specific improvements

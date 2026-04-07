@@ -1063,7 +1063,56 @@ function validateOutput(schema, output) {
   };
 }
 
-// ============== ALIASES ==============
+// ============== TYPE-SAFE DSL EXECUTOR WITH VALIDATION (FIX 1) ==============
+
+export async function runDSLWithValidation(skill, input) {
+  let ctx = { input, memory: {}, output: {} };
+
+  for (const step of skill.logic) {
+    ctx = await executeStepWithContext(step, ctx);
+
+    if (!validateStepContext(step, ctx)) {
+      throw new Error(`Step failed: ${step.op}`);
+    }
+  }
+
+  if (skill.output_schema) {
+    const validation = validateOutput(skill.output_schema, ctx.output);
+    if (!validation.valid) {
+      throw new Error(`Output schema invalid: ${validation.errors.join(", ")}`);
+    }
+  }
+
+  return ctx.output;
+}
+
+async function executeStepWithContext(step, ctx) {
+  const frame = {
+    memory: ctx.memory,
+    output: ctx.output
+  };
+
+  await executeStep(step, frame, ctx.input);
+
+  return {
+    input: ctx.input,
+    memory: frame.memory,
+    output: frame.output
+  };
+}
+
+export function validateStepContext(step, ctx) {
+  switch (step.op) {
+    case "get":
+      return ctx.memory !== undefined;
+    case "set":
+      return true;
+    case "mcp_call":
+      return ctx.memory[step.to] !== undefined || step.to === undefined;
+    default:
+      return true;
+  }
+}
 
 export async function runDSL(skill, input) {
   return runSkill(skill, input);
