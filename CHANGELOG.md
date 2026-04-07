@@ -2,7 +2,7 @@
 
 ## Test Results - 2026-04-07
 
-All **226 tests passed** (duration: ~2079ms)
+All **226 tests passed** (duration: ~1755ms)
 
 ---
 
@@ -398,6 +398,9 @@ All **226 tests passed** (duration: ~2079ms)
 9. **Loop overflow protection** - MAX_LOOPS: 10000
 10. **Step timeout** - Configurable per-step timeout
 11. **Trace system** - Execution trace recording
+12. **Schema validation** - Input/output schema enforcement
+13. **Type checking** - Numeric operations type validation
+14. **Filter condition validation** - Boolean condition enforcement
 
 ---
 
@@ -408,6 +411,6 @@ All **226 tests passed** (duration: ~2079ms)
 | Total Tests | 226 |
 | Passed | 226 |
 | Failed | 0 |
-| Duration | ~2079ms |
+| Duration | ~1755ms |
 
 **All tests passed!** ✅
