@@ -305,3 +305,30 @@ export function createPlan(goal, state, skills, options = {}) {
 
   return planner.search({ ...state, goal: goalStr }, goalStr, options);
 }
+
+export function validatePlan(plan, registry) {
+  if (!plan || !plan.bestPath) return { valid: true };
+  
+  const errors = [];
+  
+  for (const step of plan.bestPath) {
+    if (step.capability && !registry.has(step.capability)) {
+      errors.push("Unknown capability: " + step.capability);
+    }
+  }
+  
+  return {
+    valid: errors.length === 0,
+    errors
+  };
+}
+
+export function createRegistry(skills) {
+  const registry = new Set();
+  for (const skill of skills) {
+    if (skill.capability) {
+      registry.add(skill.capability);
+    }
+  }
+  return registry;
+}

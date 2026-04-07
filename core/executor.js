@@ -361,6 +361,117 @@ function evaluateCondition(expr, ctx) {
 // ============== STEP EXECUTION ==============
 
 /**
+ * Execute a single step with trace and validation (Fix #1: Step-level validation + trace)
+ */
+export async function executeStepWithTrace(step, ctx) {
+  const before = JSON.parse(JSON.stringify(ctx.output));
+
+  let result;
+
+  switch (step.op) {
+    case "set":
+      result = setValue(step, ctx);
+      break;
+    case "get":
+      result = getValue(step, ctx);
+      break;
+    case "add":
+    case "subtract":
+    case "multiply":
+    case "divide":
+      result = mathOperation(step.op, step, ctx);
+      break;
+    case "concat":
+      result = concatValue(step, ctx);
+      break;
+    case "mcp_call":
+      result = await callMCP(step, ctx);
+      break;
+    case "call_skill":
+      result = await callSkill(step, ctx);
+      break;
+    default:
+      result = null;
+  }
+
+  const after = ctx.output;
+
+  return {
+    result,
+    trace: {
+      step,
+      before,
+      after,
+      status: "ok"
+    }
+  };
+}
+
+function setValue(step, ctx) {
+  const value = resolveValue(step.value, ctx);
+  const path = step.path || step.to;
+  if (path) {
+    setPath(ctx.output, path, value);
+  }
+  return value;
+}
+
+function getValue(step, ctx) {
+  const path = step.path || step.from;
+  return getPath(ctx.input, path) ?? getPath(ctx.output, path);
+}
+
+function mathOperation(op, step, ctx) {
+  const a = resolveValue(step.a, ctx);
+  const b = resolveValue(step.b, ctx);
+  let result;
+  switch (op) {
+    case "add": result = a + b; break;
+    case "subtract": result = a - b; break;
+    case "multiply": result = a * b; break;
+    case "divide": result = b !== 0 ? a / b : NaN; break;
+  }
+  const to = step.to || step.to_output;
+  if (to) setPath(ctx.output, to, result);
+  return result;
+}
+
+function concatValue(step, ctx) {
+  const a = resolveValue(step.a, ctx) ?? "";
+  const b = resolveValue(step.b, ctx) ?? "";
+  const result = String(a) + String(b);
+  if (step.to) setPath(ctx.output, step.to, result);
+  return result;
+}
+
+async function callMCP(step, ctx) {
+  const tool = resolveValue(step.tool, ctx);
+  const args = resolveObject(step.args || {}, ctx);
+  const result = await callTool(tool, args);
+  if (step.to) setPath(ctx.output, step.to, result);
+  return result;
+}
+
+async function callSkill(step, ctx) {
+  if (!SkillRunner) throw new Error("SkillRunner not configured");
+  const skillName = resolveValue(step.skill, ctx);
+  const inputResolved = resolveObject(step.input || {}, ctx);
+  return await SkillRunner.run(skillName, { input: inputResolved });
+}
+
+function validateStepWithSchema(step, result) {
+  if (step.expect_schema) {
+    for (const [key, expectedType] of Object.entries(step.expect_schema)) {
+      const actualType = typeof result[key];
+      if (actualType !== expectedType) {
+        throw new Error(`Step validation failed: ${key} expected ${expectedType}, got ${actualType}`);
+      }
+    }
+  }
+  return true;
+}
+
+/**
  * Execute a single step
  */
 async function executeStep(step, frame, input) {

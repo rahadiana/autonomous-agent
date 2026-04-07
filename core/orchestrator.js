@@ -429,3 +429,82 @@ async function goalManager(bb) {
     bb.setStatus(Status.ERROR, "no_goal");
   }
 }
+
+export async function runAgent(input) {
+  const context = initContext(input);
+
+  const skill = await findBestSkill(context);
+
+  if (skill) {
+    return executeSkillFlow(skill, context);
+  }
+
+  return runPlanningFlow(context);
+}
+
+function initContext(input) {
+  return {
+    input: input.context || input,
+    goal: input.goal || input,
+    skills: input.skills || [],
+    attention: input.attention || null,
+    trace: [],
+    state: {},
+    version: 0
+  };
+}
+
+async function findBestSkill(context) {
+  const capability = extractCapability(context.goal);
+  const candidates = await retrieveSkills(capability, context.skills);
+  
+  if (candidates.length === 0) return null;
+  
+  const weighted = applyAttentionToSkills(candidates, context.attention);
+  return selectSkillWithBandit(weighted);
+}
+
+async function executeSkillFlow(skill, context) {
+  context.state.selectedSkill = skill;
+  
+  const result = await executeSkill(skill, context.input);
+  
+  context.trace.push({
+    step: "skill_execution",
+    skillId: skill.id,
+    status: result.error ? "error" : "ok"
+  });
+  
+  return {
+    output: result,
+    trace: context.trace
+  };
+}
+
+async function runPlanningFlow(context) {
+  const planResult = maybePlan(context.goal, context.skills);
+  
+  if (!planResult.shouldPlan) {
+    return executeSkillFlow(planResult.bestSkill, context);
+  }
+  
+  context.state.planning = true;
+  const plans = await plannerStepFromContext(context);
+  
+  context.trace.push({
+    step: "planning",
+    plans: plans.length,
+    reason: planResult.reason
+  });
+  
+  const compiled = compilePlanToSkill(plans);
+  return executeSkillFlow(compiled, context);
+}
+
+async function plannerStepFromContext(context) {
+  const { createPlan } = await import("./planner.js");
+  return createPlan(context.goal, { steps: 0 }, context.skills, {
+    maxDepth: CONFIG.MAX_STEPS,
+    maxCost: CONFIG.ACCEPT_SCORE
+  });
+}
