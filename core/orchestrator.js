@@ -1,6 +1,6 @@
 import { createBlackboard, Status } from "./blackboard.js";
 import { createPlan } from "./planner.js";
-import { runSkill } from "./executor.js";
+import { runSkill, executeSkill } from "./executor.js";
 import { selectSkill, banditScore } from "./bandit.js";
 import { shouldMutate, mutateSkill, acceptMutation, mutateFromFailure } from "./mutation.js";
 import { createVersion } from "./versioning.js";
@@ -13,7 +13,10 @@ export const CONFIG = {
   MUTATION_RATE: 0.2,
   DECAY_RATE: 0.05,
   MAX_RETRIES: 3,
-  RETRY_DELAY_MS: 100
+  RETRY_DELAY_MS: 100,
+  PLANNER_GATE_THRESHOLD: 0.6,
+  MUTATION_USAGE_THRESHOLD: 5,
+  MUTATION_SUCCESS_THRESHOLD: 0.7
 };
 
 function freshness(skill) {
@@ -31,6 +34,17 @@ function finalSkillScore(skill, similarity, totalSelections) {
     bandit * 0.3 +
     freshnessScore * 0.2
   );
+}
+
+export function applyAttentionToSkills(skills, attention) {
+  if (!attention || !attention.weights) return skills;
+  return skills.map(s => {
+    const weight = attention.weights[s.capability] || 1;
+    return {
+      ...s,
+      adjustedScore: s.score * weight
+    };
+  });
 }
 
 export async function selectBestSkill(skills, goal) {
@@ -69,6 +83,33 @@ export function compilePlanToSkill(plan) {
   };
 }
 
+export function maybePlan(input, skills) {
+  if (!skills || skills.length === 0) {
+    return { shouldPlan: true, reason: "no_skills" };
+  }
+
+  const best = skills[0];
+  
+  if (!best || best.score < CONFIG.PLANNER_GATE_THRESHOLD) {
+    return { shouldPlan: true, reason: "low_score", currentScore: best?.score || 0 };
+  }
+
+  return { shouldPlan: false, reason: "skill_available", bestSkill: best };
+}
+
+export async function getBestSkillVersion(capability) {
+  return { capability, score: CONFIG.ACCEPT_SCORE };
+}
+
+async function processGoals(bb) {
+  const goals = bb.getZoneData("goals");
+  if (!goals || goals.length === 0) return null;
+  
+  const goal = goals[0];
+  bb.write("currentGoal", goal, "goal_manager");
+  return goal.description;
+}
+
 export async function plannerStep(bb, skills) {
   const state = bb.getControlState();
   const goal = bb.getZoneData("goal");
@@ -91,7 +132,7 @@ export async function executorStep(bb, selectedSkill) {
   try {
     const compiledSkill = compilePlanToSkill(plan) || selectedSkill;
     const input = bb.getZoneData("context") || {};
-    const result = await runSkill(compiledSkill, input);
+    const result = await executeSkill(compiledSkill, input);
 
     bb.write("execution", { result }, "executor");
     bb.setStatus(Status.CRITIC);
@@ -120,37 +161,54 @@ export async function criticStep(bb, result) {
   return { score };
 }
 
+function shouldMutateTargeted(skill) {
+  return (
+    skill.usage_count > CONFIG.MUTATION_USAGE_THRESHOLD &&
+    (skill.success_count || skill.usage_count) / skill.usage_count < CONFIG.MUTATION_SUCCESS_THRESHOLD
+  );
+}
+
 export async function learningStep(bb, selectedSkill) {
   const execution = bb.getZoneData("execution");
   const result = bb.getZoneData("result");
 
   if (!execution?.result || !selectedSkill) return;
 
-  const success = result?.score > 0.7;
+  const success = result?.score > CONFIG.MUTATION_SUCCESS_THRESHOLD;
 
   if (selectedSkill) {
     selectedSkill.usage_count = (selectedSkill.usage_count || 0) + 1;
     selectedSkill.last_used_at = Date.now();
     if (success) {
       selectedSkill.score = Math.min(1, (selectedSkill.score || 0) + 0.1);
+      selectedSkill.success_count = (selectedSkill.success_count || 0) + 1;
     } else {
       selectedSkill.score = Math.max(0, (selectedSkill.score || 0) - 0.05);
     }
 
-    const mutationCheck = shouldMutate(selectedSkill);
-    if (mutationCheck.shouldMutate) {
+    if (shouldMutateTargeted(selectedSkill)) {
       const mutated = mutateSkill(selectedSkill);
-      const mutatedScore = await testSkill(mutated);
-      const accept = acceptMutation(selectedSkill.score, mutatedScore);
       
-      if (accept.accept) {
-        const newVersion = createVersion(selectedSkill);
-        Object.assign(newVersion, mutated);
-        newVersion.parent_id = selectedSkill.id;
-        return newVersion;
+      if (validateDSL(mutated)) {
+        const score = await testSkill(mutated);
+        
+        if (score > selectedSkill.score + 0.05) {
+          const newVersion = createVersion(selectedSkill);
+          Object.assign(newVersion, mutated);
+          newVersion.parent_id = selectedSkill.id;
+          return newVersion;
+        }
       }
     }
   }
+}
+
+function validateDSL(skill) {
+  if (!skill.logic || !Array.isArray(skill.logic)) return false;
+  for (const step of skill.logic) {
+    if (!step.op || typeof step.op !== "string") return false;
+  }
+  return true;
 }
 
 async function testSkill(skill) {
@@ -159,6 +217,162 @@ async function testSkill(skill) {
     return result?._meta?.score || 0.5;
   } catch {
     return 0;
+  }
+}
+
+async function decay(bb) {
+  const skills = bb.getZoneData("skills");
+  if (!skills) return;
+  
+  for (const skill of skills) {
+    if (skill.last_used_at) {
+      const age = Date.now() - skill.last_used_at;
+      const decayAmount = (age / (24 * 60 * 60 * 1000)) * CONFIG.DECAY_RATE;
+      skill.score = Math.max(0, (skill.score || 0) - decayAmount);
+    }
+  }
+}
+
+async function prune(bb) {
+  const skills = bb.getZoneData("skills");
+  if (!skills) return;
+  
+  const pruned = skills.filter(s => s.score > 0.1 || s.usage_count > 3);
+  bb.write("skills", pruned, "learning");
+}
+
+function shouldExplore(bb) {
+  const random = Math.random();
+  return random < 0.1;
+}
+
+async function explore(bb, selectedSkill) {
+  const skills = bb.getZoneData("skills");
+  const newCapability = "explore_" + Date.now();
+  const newSkill = {
+    id: "explore_" + Date.now(),
+    capability: newCapability,
+    score: 0.5,
+    usage_count: 0,
+    last_used_at: null,
+    logic: [{ op: "get", path: "result", value: {} }]
+  };
+  
+  bb.write("skills", [...(skills || []), newSkill], "exploration");
+}
+
+function extractCapability(input) {
+  if (typeof input === "string") {
+    return input.split(" ")[0].toLowerCase();
+  }
+  if (input.goal) {
+    return input.goal.toString().split(" ")[0].toLowerCase();
+  }
+  return "unknown";
+}
+
+export async function retrieveSkills(capability, allSkills) {
+  if (!allSkills || allSkills.length === 0) return [];
+  
+  return allSkills.filter(s => 
+    s.capability?.toLowerCase().includes(capability) ||
+    s.capability?.toLowerCase() === capability
+  );
+}
+
+export async function agentLoop(input, allSkills = []) {
+  const capability = extractCapability(input);
+
+  const candidates = await retrieveSkills(capability, allSkills);
+
+  const selected = selectSkillWithBandit(candidates);
+
+  const result = await execute(selected, input);
+
+  const valid = validate(selected?.output_schema, result);
+
+  await updateSkillStats(selected, valid);
+
+  if (shouldExplore()) {
+    await explore(selected);
+  }
+
+  await decay();
+  await prune();
+
+  return result;
+}
+
+function selectSkillWithBandit(candidates) {
+  if (!candidates || candidates.length === 0) return null;
+  return selectSkill(candidates);
+}
+
+async function execute(skill, input) {
+  if (!skill) {
+    return { error: "no_skill", _meta: { score: 0 } };
+  }
+  return executeSkill(skill, input);
+}
+
+function validate(output_schema, result) {
+  if (!output_schema) return true;
+  return result && !result.error;
+}
+
+async function updateSkillStats(skill, valid) {
+  if (!skill) return;
+  
+  skill.usage_count = (skill.usage_count || 0) + 1;
+  skill.last_used_at = Date.now();
+  
+  if (valid) {
+    skill.score = Math.min(1, (skill.score || 0) + 0.1);
+    skill.success_count = (skill.success_count || 0) + 1;
+  } else {
+    skill.score = Math.max(0, (skill.score || 0) - 0.05);
+  }
+}
+
+export async function main(input) {
+  const goalInput = await processGoals(input) || input;
+
+  const skills = input.skills || [];
+  
+  const capability = extractCapability(goalInput);
+  const retrievedSkills = await retrieveSkills(capability, skills);
+
+  const weighted = applyAttentionToSkills(retrievedSkills, input.attention);
+
+  const selected = selectSkillWithBandit(weighted);
+
+  const result = await executeSkill(selected, goalInput);
+
+  await updateSkillStats(selected, !result.error);
+
+  await maybeMutate(selected);
+
+  return result;
+}
+
+async function maybeMutate(skill) {
+  if (!skill) return;
+  
+  const mutationCheck = shouldMutate(skill);
+  if (mutationCheck.shouldMutate) {
+    const mutated = mutateSkill(skill);
+    
+    if (validateDSL(mutated)) {
+      const score = await testSkill(mutated);
+      const accept = acceptMutation(skill.score, score);
+      
+      if (accept.accept) {
+        const newVersion = createVersion(skill);
+        Object.assign(newVersion, mutated);
+        newVersion.parent_id = skill.id;
+        return newVersion;
+      }
+    }
   }
 }
 
@@ -215,5 +429,3 @@ async function goalManager(bb) {
     bb.setStatus(Status.ERROR, "no_goal");
   }
 }
-
-export { CONFIG as SYSTEM_CONFIG };

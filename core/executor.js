@@ -897,6 +897,22 @@ export async function runDSL(skill, input) {
   return runSkill(skill, input);
 }
 
+export async function executeSkill(skill, input) {
+  if (!skill) {
+    return { error: "no_skill", _meta: { score: 0 } };
+  }
+
+  if (skill.type === "code" || typeof skill.logic === "string") {
+    try {
+      return await runSkill(skill, input);
+    } catch {
+      return runDSL(skill, input);
+    }
+  }
+
+  return runDSL(skill, input);
+}
+
 // ============== SKILL RUNNER ==============
 
 let SkillRunner = null;
