@@ -1,126 +1,233 @@
-Saya akan langsung ke inti: sistem kamu **sudah di level “arsitektur serius”**, tapi masih ada gap besar antara **desain (yang sangat ambisius)** vs **eksekusi nyata di codebase**.
+Saya sudah baca isi sistem kamu (arsitektur + file desain). Secara garis besar: **arahnya sudah benar**, tapi implementasi kamu masih di level “proto-agent”, belum “robust autonomous system”.
 
-Di bawah ini kritiknya saya buat brutal + actionable. Fokus: **apa yang akan bikin sistem kamu benar-benar jalan vs cuma terlihat canggih**.
-
----
-
-# 🔴 1. MASALAH UTAMA: OVER-ARCHITECTED, UNDER-ENFORCED
-
-Dari semua dokumen kamu:
-
-* ada **planner + critic loop**
-* ada **hierarchical planning**
-* ada **blackboard + scheduler**
-* ada **skill evolution + bandit**
-* ada **goal autonomy**
-
-👉 Ini bukan masalah.
-
-Masalahnya:
-
-> **tidak ada enforcement layer yang kuat di runtime**
-
-Akibatnya:
-
-* planner bisa halu
-* skill bisa invalid tapi tetap masuk
-* critic bisa bias
-* mutation bisa jadi noise
+Saya akan langsung ke inti: **apa yang rusak, kenapa, dan bagaimana memperbaikinya (dengan kode konkret)**.
 
 ---
 
-# 🔥 2. SKILL SYSTEM — BELUM BENAR-BENAR “EVOLUTIONARY”
+# 🔴 0. DIAGNOSIS KERAS (REALITY CHECK)
 
-Kamu sudah punya:
+Saat ini sistem kamu:
 
-* reinforcement
-* decay
-* versioning
+✔ Sudah punya:
 
+* planner / executor / critic
+* DSL execution
+* skill system
+* basic learning loop
 
-Dan bahkan:
+❌ Tapi belum:
 
-* bandit (UCB)
-* mutation
+* evaluator yang *grounded*
+* test generator yang *reliable*
+* feedback loop yang *jujur*
+* control terhadap noise (mutation / planning)
 
+👉 Artinya:
 
-Tapi masalah kritis:
+> Sistem kamu **kelihatan pintar, tapi belum benar-benar belajar**
 
-## ❌ Tidak ada **ground truth evaluator**
+---
 
-Saat ini evaluasi kamu:
+# 🔴 1. MASALAH PALING FATAL: EVALUATOR ITU PALSU
+
+Dari desain kamu:
 
 ```ts
-if (result !== undefined) score += 0.4;
-```
+function evaluate(result, validation) {
+  let score = 0;
 
-👉 Ini terlalu lemah.
+  if (validation.valid) score += 0.2;
+  if (result !== undefined) score += 0.4;
 
-### Dampak:
+  score += 0.2;
+  score += 0.2;
 
-* skill salah bisa tetap score tinggi
-* sistem “belajar kesalahan”
-
----
-
-## ✅ FIX (WAJIB)
-
-Tambahkan **task-specific validator layer**
-
-```ts
-function evaluateWithGroundTruth(result, expected) {
-  if (!expected) return 0.5;
-
-  if (JSON.stringify(result) === JSON.stringify(expected)) {
-    return 1.0;
-  }
-
-  return 0.0;
+  return score;
 }
 ```
 
-Lalu gabungkan:
+Ini **bukan evaluator**, ini **random scoring disguised as logic**.
+
+### Kenapa ini bahaya:
+
+* skill jelek bisa lolos
+* skill bagus bisa gagal
+* learning jadi noise
+
+---
+
+## ✅ FIX: GROUNDED EVALUATOR (WAJIB)
+
+Tambahkan **expected output + test oracle**
 
 ```ts
-finalScore =
-  (groundTruth * 0.5) +
-  (schemaValid * 0.2) +
-  (reuseScore * 0.15) +
-  (efficiency * 0.15);
+function evaluateTestCase(result, expected) {
+  if (typeof expected === "object") {
+    return JSON.stringify(result) === JSON.stringify(expected);
+  }
+  return result === expected;
+}
+
+function evaluateSkill(testResults) {
+  let pass = 0;
+
+  for (const t of testResults) {
+    if (evaluateTestCase(t.result, t.expected)) {
+      pass++;
+    }
+  }
+
+  const accuracy = pass / testResults.length;
+
+  return {
+    score: accuracy,
+    valid: accuracy >= 0.8
+  };
+}
+```
+
+👉 Ini baru evaluator yang **punya makna**.
+
+---
+
+# 🔴 2. TEST GENERATOR KAMU NGGAK ADA ISINYA
+
+Sekarang:
+
+```ts
+function buildTestCases(skill) {
+  return [
+    { input: {} },
+  ];
+}
+```
+
+Ini **tidak menguji apa-apa**.
+
+---
+
+## ✅ FIX: SCHEMA-DRIVEN TEST GENERATOR
+
+Gunakan schema:
+
+```ts
+function generateFromSchema(schema) {
+  const obj = {};
+
+  for (const key in schema.properties) {
+    const prop = schema.properties[key];
+
+    if (prop.type === "number") obj[key] = 1;
+    if (prop.type === "string") obj[key] = "test";
+    if (prop.type === "boolean") obj[key] = true;
+  }
+
+  return obj;
+}
+
+function buildTestCases(skill) {
+  const base = generateFromSchema(skill.input_schema);
+
+  return [
+    {
+      input: base,
+      expected: null // nanti diisi evaluator LLM / reference
+    },
+    {
+      input: {},
+      expected: "error"
+    },
+    {
+      input: null,
+      expected: "error"
+    }
+  ];
+}
 ```
 
 ---
 
-# 🔴 3. PLANNER SYSTEM — MASIH BISA HALU
+## 🔥 UPGRADE WAJIB: DUAL EVALUATION
 
-Planner kamu sudah bagus:
+Gabungkan:
 
-* multi-plan
-* critic loop
+1. **Rule-based (deterministic)**
+2. **LLM evaluator (semantic)**
 
+```ts
+async function hybridEvaluate(skill, result, expected) {
+  const rule = evaluateTestCase(result, expected);
 
-Tapi:
+  const llmScore = await llmJudge({
+    input: skill,
+    output: result
+  });
 
-## ❌ Tidak ada **capability hard validation sebelum execution**
-
-Planner bisa generate:
-
-```json
-{ "capability": "magic.doSomething" }
+  return (rule ? 0.6 : 0) + (llmScore * 0.4);
+}
 ```
-
-Dan sistem kamu tetap lanjut.
 
 ---
 
-## ✅ FIX
+# 🔴 3. TIDAK ADA FAILURE MEMORY
 
-Tambahkan gate sebelum execute:
+Saat skill gagal:
+👉 kamu **buang saja**
+
+Ini kesalahan besar.
+
+---
+
+## ✅ FIX: FAILURE MEMORY
+
+Tambahkan tabel:
 
 ```ts
-function validatePlan(plan, capabilities) {
+const FailureLog = sequelize.define("FailureLog", {
+  capability: DataTypes.STRING,
+  input: DataTypes.JSON,
+  error: DataTypes.STRING,
+  created_at: DataTypes.DATE
+});
+```
+
+Hook:
+
+```ts
+if (!success) {
+  await FailureLog.create({
+    capability: skill.capability,
+    input,
+    error: JSON.stringify(result)
+  });
+}
+```
+
+---
+
+## 🔥 Dampak:
+
+* planner bisa belajar dari kegagalan
+* test generator bisa ambil edge case real
+
+---
+
+# 🔴 4. PLANNER MASIH HALU (NO REAL CONSTRAINT)
+
+Masalah kamu:
+
+> planner generate capability yang belum tentu ada
+
+Sudah disebut di arsitektur kamu sendiri 
+
+---
+
+## ✅ FIX: HARD CAPABILITY CHECK
+
+```ts
+function validatePlan(plan, availableCapabilities) {
   for (const step of plan.steps) {
-    if (!capabilities.includes(step.capability)) {
+    if (!availableCapabilities.includes(step.capability)) {
       return false;
     }
   }
@@ -128,702 +235,216 @@ function validatePlan(plan, capabilities) {
 }
 ```
 
-Dipakai di orchestrator:
+---
 
-```ts
-if (!validatePlan(plan, capabilityList)) {
-  continue; // reject plan
-}
-```
+# 🔴 5. EXECUTOR BELUM PUNYA TRACE (INI FATAL)
+
+Tanpa trace:
+
+* tidak bisa debug
+* tidak bisa evaluasi step-level
 
 ---
 
-# 🔴 4. BLACKBOARD — RAWAN RACE CONDITION
-
-Kamu sudah implement:
-
-* shared state
-* multi-agent
-
-
-Dan bahkan:
-
-* attention + scheduler
-
-
-Masalah:
-
-## ❌ Tidak ada locking / transaction
+## ✅ FIX: EXECUTION TRACE
 
 ```ts
-this.state = { ...this.state, ...patch };
-```
+async function runDSL(skill, input) {
+  const ctx = { input, output: {}, trace: [] };
 
-👉 ini unsafe kalau async agent jalan paralel
+  for (const step of skill.logic) {
+    const before = JSON.stringify(ctx);
 
----
+    await executeStep(step, ctx);
 
-## ✅ FIX (minimal)
-
-Tambahkan versioning:
-
-```ts
-set(patch) {
-  const currentVersion = this.state._v || 0;
-
-  this.state = {
-    ...this.state,
-    ...patch,
-    _v: currentVersion + 1
-  };
-
-  this.notify();
-}
-```
-
-Dan agent baca:
-
-```ts
-const snapshot = bb.get();
-const version = snapshot._v;
-
-// setelah run
-if (bb.get()._v !== version) {
-  return; // state sudah berubah → cancel
-}
-```
-
----
-
-# 🔴 5. DSL EXECUTOR — MASIH TERLALU “LEMBEK”
-
-Kamu sudah:
-
-* punya MCP call
-
-
-Bagus.
-
-Tapi:
-
-## ❌ Tidak ada **step validation per execution**
-
----
-
-## ✅ FIX
-
-Tambahkan runtime guard:
-
-```ts
-function validateStep(step) {
-  if (!step.op) throw new Error("Missing op");
-
-  if (step.op === "mcp_call" && !step.tool) {
-    throw new Error("Missing tool");
+    ctx.trace.push({
+      step,
+      state: JSON.parse(JSON.stringify(ctx))
+    });
   }
-}
-```
 
-Di executor:
-
-```ts
-for (const step of skill.logic) {
-  validateStep(step);
-  await executeStep(step, ctx);
+  return ctx;
 }
 ```
 
 ---
 
-# 🔴 6. HIERARCHICAL PLANNER — BELUM ADA CONTEXT CONTRACT
+# 🔴 6. TIDAK ADA STEP-LEVEL EVALUATION
 
-Kamu sudah benar:
+Semua kamu nilai di akhir.
 
-* macro → micro
-
-
-Tapi:
-
-## ❌ Context antar subgoal tidak distandarisasi
+👉 Ini salah.
 
 ---
 
-## ✅ FIX
-
-WAJIB enforce:
-
-```json
-{
-  "result": {}
-}
-```
-
-Dan executor:
+## ✅ FIX: STEP CRITIC
 
 ```ts
-globalContext = {
-  ...globalContext,
-  ...result.result
-};
-```
-
-Kalau tidak:
-→ subgoal tidak nyambung
-
----
-
-# 🔴 7. GOAL AUTONOMY — BERBAHAYA TANPA FILTER
-
-Kamu sudah punya:
-
-* curiosity engine
-* goal generator
-
-
-Masalah:
-
-## ❌ Tidak ada relevance filter ke user/system objective
-
----
-
-## ✅ FIX
-
-Tambahkan constraint:
-
-```ts
-function isRelevant(goal, rootGoal) {
-  return goal.description.includes(rootGoal);
-}
-```
-
-Dan:
-
-```ts
-newGoals = newGoals.filter(g => isRelevant(g, bb.goal));
-```
-
-Kalau tidak:
-→ agent jadi “sibuk sendiri”
-
----
-
-# 🔴 8. CODE GENERATION — PALING BERISIKO
-
-Kamu sudah sangat benar:
-
-* sandbox VM
-* static validation
-
-
-Tapi:
-
-## ❌ Tidak ada **resource isolation nyata**
-
-`vm` saja tidak cukup.
-
----
-
-## ✅ FIX (serius)
-
-Gunakan child process:
-
-```ts
-import { fork } from "child_process";
-
-function runIsolated(mod, input) {
-  return new Promise((resolve, reject) => {
-    const child = fork("./worker.js");
-
-    child.send({ mod, input });
-
-    child.on("message", resolve);
-    child.on("error", reject);
-
-    setTimeout(() => {
-      child.kill();
-      reject("timeout");
-    }, 100);
-  });
-}
-```
-
----
-
-# 🔴 9. YANG PALING KRITIS: TIDAK ADA “SYSTEM METRIC”
-
-Semua ini percuma kalau kamu tidak bisa jawab:
-
-* apakah agent makin pintar?
-* apakah success rate naik?
-* apakah latency turun?
-
----
-
-## ✅ FIX
-
-Tambahkan metrics:
-
-```ts
-const Metrics = {
-  success_rate: [],
-  avg_score: [],
-  plan_depth: [],
-  execution_time: []
-};
-```
-
-Update tiap run:
-
-```ts
-Metrics.success_rate.push(success ? 1 : 0);
-```
-
----
-
-# 🧠 KESIMPULAN (REAL TALK)
-
-Sistem kamu:
-
-✅ Sudah:
-
-* modular
-* scalable
-* mendekati research-level architecture
-
-❌ Tapi:
-
-* belum cukup **strict**
-* belum cukup **measurable**
-* belum cukup **robust**
-
----
-
-# 🚀 PRIORITAS PERBAIKAN (URUTAN WAJIB)
-
-Jangan lompat:
-
-### 1. ✅ Validator + Ground Truth
-
-→ tanpa ini, learning = ilusi
-
-### 2. ✅ Capability enforcement
-
-→ cegah halusinasi planner
-
-### 3. ✅ Execution safety (DSL + VM)
-
-→ cegah crash/chaos
-
-### 4. ✅ Blackboard consistency
-
-→ cegah race condition
-
-### 5. ✅ Metrics system
-
-→ biar kamu tahu ini berhasil atau tidak
-
----
-
-# ⚠️ PENUTUP (BIAR KAMU GA SALAH JALAN)
-
-Sekarang sistem kamu terlihat seperti:
-
-> “AI yang bisa semuanya”
-
-Padahal realitanya:
-
-> **“framework yang butuh disiplin engineering ketat”**
-
-Kalau kamu lanjut tanpa perbaiki fondasi:
-→ sistem makin kompleks
-→ tapi tidak makin pintar
-
----
-
-Kalau mau lanjut ke level berikutnya yang benar-benar impactful:
-
-👉 bilang:
-**“audit bagian evaluator + test generator, saya mau dibuat benar-benar kuat”**
-
-Itu titik paling menentukan apakah ini jadi sistem AI beneran… atau cuma arsitektur keren.
-
-
-
-Bagus. Ini memang **titik paling menentukan**.
-Kalau evaluator + test generator kamu lemah → seluruh sistem “belajar kebodohan”.
-
-Saya akan audit secara langsung + kasih desain ulang yang **production-grade**, bukan sekadar teori.
-
----
-
-# 🔴 1. MASALAH FUNDAMENTAL SAAT INI
-
-Dari implementasi kamu:
-
-## Evaluator
-
-```ts
-if (result !== undefined) score += 0.4;
-```
-
-## Test generator
-
-```ts
-return [{ input: {} }];
-```
-
-👉 Ini fatal.
-
-### Dampak nyata:
-
-* skill salah tetap “lulus”
-* tidak ada pressure untuk improve
-* mutation menghasilkan noise
-* bandit optimize hal yang salah
-
----
-
-# 🧠 2. TARGET YANG BENAR
-
-Evaluator + Test harus:
-
-### ✔ Deterministic
-
-→ hasil sama untuk input sama
-
-### ✔ Comparable
-
-→ bisa bandingkan antar skill
-
-### ✔ Grounded
-
-→ ada “kebenaran”, bukan feeling
-
-### ✔ Adversarial
-
-→ tidak cuma happy path
-
----
-
-# 🔥 3. DESAIN BARU: TEST GENERATOR (WAJIB UPGRADE TOTAL)
-
-Kita pecah jadi 3 layer:
-
----
-
-## 🧩 3.1 BASE CASE (schema-driven)
-
-Gunakan schema untuk generate valid input:
-
-```ts
-import { faker } from "@faker-js/faker";
-
-function generateFromSchema(schema) {
-  const obj = {};
-
-  for (const key in schema.properties) {
-    const prop = schema.properties[key];
-
-    switch (prop.type) {
-      case "string":
-        obj[key] = faker.lorem.word();
-        break;
-      case "number":
-        obj[key] = faker.number.int({ min: 1, max: 100 });
-        break;
-      case "boolean":
-        obj[key] = faker.datatype.boolean();
-        break;
+function evaluateTrace(trace) {
+  const issues = [];
+
+  for (const t of trace) {
+    if (t.state.error) {
+      issues.push(`Error at step ${JSON.stringify(t.step)}`);
     }
   }
 
-  return obj;
+  return issues;
 }
 ```
 
 ---
 
-## 🧩 3.2 EDGE CASE (INI YANG MEMBUAT SISTEM “PINTAR”)
+# 🔴 7. LEARNING SYSTEM BELUM “SELEKSI ALAM”
+
+Kamu sudah punya konsep ini 
+tapi implementasi kamu belum enforce.
+
+---
+
+## ✅ FIX: STRICT PROMOTION RULE
 
 ```ts
-function generateEdgeCases(schema) {
-  return [
-    {}, // empty
-    null,
-    undefined,
-    Object.fromEntries(
-      Object.keys(schema.properties).map(k => [k, null])
-    )
-  ];
+if (newScore > oldScore + 0.1 && successRate > 0.8) {
+  promote();
+} else {
+  reject();
 }
 ```
 
 ---
 
-## 🧩 3.3 ADVERSARIAL CASE
+# 🔴 8. MUTATION MASIH RANDOM (INI BAHAYA)
+
+Dari desain kamu :
 
 ```ts
-function generateAdversarial(schema) {
-  return [
-    { unexpected: "field" },
-    "invalid_type",
-    12345
-  ];
-}
+step.op = Math.random() > 0.5 ? "add" : "subtract";
 ```
 
+👉 Ini bukan learning. Ini chaos.
+
 ---
 
-## 🔧 FINAL TEST BUILDER
+## ✅ FIX: GUIDED MUTATION
 
 ```ts
-function buildTestCases(skill) {
-  const schema = skill.input_schema;
+function mutateFromFailure(skill, failureLog) {
+  const newSkill = clone(skill);
 
-  return [
-    {
-      type: "base",
-      input: generateFromSchema(schema)
-    },
-    ...generateEdgeCases(schema).map(input => ({
-      type: "edge",
-      input
-    })),
-    ...generateAdversarial(schema).map(input => ({
-      type: "adversarial",
-      input
-    }))
-  ];
-}
-```
-
----
-
-# 🔴 4. MASALAH KRITIS: TIDAK ADA EXPECTED OUTPUT
-
-Ini yang paling sering bikin sistem gagal.
-
-Kalau tidak ada expected:
-→ evaluator jadi “feeling-based”
-
----
-
-# ✅ 4. SOLUSI: DUAL MODE EVALUATION
-
----
-
-## MODE 1 — WITH GROUND TRUTH (BEST)
-
-Kalau skill punya expected:
-
-```ts
-function strictCompare(a, b) {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-```
-
----
-
-## MODE 2 — WITHOUT GROUND TRUTH
-
-Gunakan proxy:
-
-### ✔ schema validity
-
-### ✔ determinism
-
-### ✔ consistency
-
----
-
-# 🔥 5. EVALUATOR BARU (PRODUCTION READY)
-
-```ts
-async function evaluateSkill(skill, testCases) {
-  let total = 0;
-
-  for (const test of testCases) {
-    let score = 0;
-
-    let result1, result2;
-
-    try {
-      result1 = await runDSL(skill, test.input);
-      result2 = await runDSL(skill, test.input);
-    } catch {
-      continue; // crash = 0
-    }
-
-    // 1. determinism
-    if (JSON.stringify(result1) === JSON.stringify(result2)) {
-      score += 0.2;
-    }
-
-    // 2. schema validation
-    const valid = validate(skill.output_schema, result1).valid;
-    if (valid) score += 0.3;
-
-    // 3. non-empty result
-    if (result1 && Object.keys(result1).length > 0) {
-      score += 0.2;
-    }
-
-    // 4. adversarial robustness
-    if (test.type === "adversarial" && !valid) {
-      score += 0.3;
-    }
-
-    total += score;
+  if (failureLog.error.includes("undefined")) {
+    newSkill.logic.unshift({
+      op: "validate_input"
+    });
   }
 
-  return total / testCases.length;
+  return newSkill;
 }
 ```
 
 ---
 
-# 🔴 6. TAMBAHAN WAJIB: CONSISTENCY CHECK
+# 🔴 9. TIDAK ADA COST CONTROL
 
-Skill yang bagus → stabil di banyak input
+Planner kamu bisa:
+
+* generate plan panjang
+* call MCP banyak
+* burn CPU
+
+---
+
+## ✅ FIX: COST MODEL
 
 ```ts
-function consistencyScore(results) {
-  const unique = new Set(results.map(r => JSON.stringify(r)));
-  return unique.size === results.length ? 1 : 0.5;
+function computeCost(plan) {
+  return plan.steps.length * 1 +
+         plan.steps.filter(s => s.op === "mcp_call").length * 5;
+}
+```
+
+Gunakan di scoring:
+
+```ts
+finalScore = score - (cost * 0.05);
+```
+
+---
+
+# 🔴 10. SYSTEM KAMU BELUM STABIL (NO CONTROL LOOP)
+
+Kamu sudah punya blackboard + scheduler 
+tapi belum enforce stabilitas.
+
+---
+
+## ✅ FIX: GLOBAL STOP CONDITION
+
+```ts
+if (cycle > 10 || noImprovement > 3) {
+  stop("converged or stuck");
 }
 ```
 
 ---
 
-# 🔴 7. TAMBAHAN WAJIB: LATENCY PENALTY
+# 🧠 RINGKASAN KRITIS
 
-Kalau tidak:
-→ skill lambat tetap dianggap bagus
+## Yang harus kamu lakukan SEKARANG:
 
-```ts
-const start = Date.now();
-await runDSL(skill, input);
-const latency = Date.now() - start;
+### 1. WAJIB (fondasi)
 
-if (latency < 50) score += 0.1;
-else score -= 0.1;
-```
+* perbaiki evaluator → **ground truth based**
+* perbaiki test generator → **schema + edge case**
+* tambah failure memory
 
----
+### 2. LEVEL 2
 
-# 🔴 8. ANTI-CHEATING GUARD
+* trace execution
+* step-level critic
+* capability validation
 
-Skill bisa “curang”:
-→ selalu return dummy output valid schema
+### 3. LEVEL 3
 
----
-
-## ✅ DETEKSI
-
-```ts
-function detectConstantOutput(results) {
-  const first = JSON.stringify(results[0]);
-  return results.every(r => JSON.stringify(r) === first);
-}
-```
-
-Kalau true:
-
-```ts
-score -= 0.3;
-```
+* guided mutation
+* cost-aware planning
+* strict promotion rule
 
 ---
 
-# 🔥 9. FINAL EVALUATION FORMULA
+# 🚀 PENILAIAN JUJUR
 
-```ts
-finalScore =
-  (avgTestScore * 0.5) +
-  (consistency * 0.2) +
-  (latencyScore * 0.1) +
-  (robustness * 0.2);
-```
+Sistem kamu sekarang:
 
----
+| Aspek         | Nilai |
+| ------------- | ----- |
+| Arsitektur    | 8/10  |
+| Implementasi  | 4/10  |
+| Learning loop | 3/10  |
+| Stability     | 3/10  |
 
-# 🔴 10. TEST COVERAGE TRACKING (ADVANCED)
+👉 Kesimpulan:
 
-Kalau kamu serius:
-
-```ts
-const coverage = {
-  total_tests: testCases.length,
-  passed: passedCount,
-  failed: failedCount
-};
-```
-
-Dan simpan ke DB.
+> Ini **bukan gagal**, tapi **belum hidup**
 
 ---
 
-# 🔴 11. INTEGRASI KE PIPELINE (WAJIB DIGANTI)
+# 🎯 NEXT STEP PALING KRITIS
 
-Ganti ini:
+Kalau kamu mau sistem ini benar-benar “berpikir”:
 
-```ts
-const score = evaluate(...)
-```
+👉 fokus ke:
 
-Dengan:
+**evaluator + test generator + failure memory**
 
-```ts
-const tests = buildTestCases(skill);
-const score = await evaluateSkill(skill, tests);
-```
+Bukan nambah fitur.
 
 ---
 
-# ⚠️ 12. REALITY CHECK
+Kalau kamu mau, saya bisa lanjut audit lebih dalam ke:
 
-Dengan sistem ini:
+* evaluator kamu saat ini (line-by-line)
+* test generator real (LLM + rule hybrid)
+* atau bikin **benchmark system biar kamu tahu agent kamu beneran improve atau tidak**
 
-### Sebelum:
-
-* skill asal lolos
-* sistem terlihat “belajar”
-
-### Sesudah:
-
-* skill harus survive tekanan
-* hanya skill kuat yang hidup
-
----
-
-# 🧠 13. DAMPAK NYATA
-
-Kalau ini kamu implement:
-
-✅ mutation jadi meaningful
-✅ bandit selection jadi valid
-✅ skill evolution benar-benar terjadi
-✅ planner tidak lagi “ditipu” skill jelek
-
----
-
-# 🚀 NEXT STEP (KRUSIAL BANGET)
-
-Kalau kamu mau sistem ini naik level drastis:
-
-👉 bilang:
-
-**“buatkan evaluator berbasis reference task (dataset kecil + benchmark)”**
-
-Itu akan:
-
-* bikin evaluator punya ground truth nyata
-* bikin skill bisa diukur seperti model ML
-
----
-
-Kalau kamu berhenti di sini:
-→ sistem kamu sudah **cukup kuat untuk self-improving loop yang stabil**
-
-Kalau lanjut:
-→ bisa jadi **mini AutoML untuk skill system**
+Tentukan saja.
