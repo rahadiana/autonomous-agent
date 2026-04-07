@@ -1,450 +1,511 @@
-Saya sudah baca struktur arsitektur yang kamu bangun dari file–file yang kamu kirim (planner, DSL, executor, mutation, blackboard, dll). Saya tidak akan basa-basi: **arahnya sudah benar, tapi implementasi kamu masih “pseudo-intelligence”, belum jadi system yang stabil**.
+Saya sudah baca isi arsitektur + file konsep yang kamu upload. Ini bukan proyek biasa — ini sudah masuk **proto cognitive agent system**. Tapi secara implementasi sekarang, ada gap serius antara *design ambition* vs *runtime reality*.
 
-Saya breakdown secara brutal + actionable.
+Saya akan langsung kritik tajam + kasih patch konkret (dengan kode), termasuk **input/output contoh**, supaya bisa langsung kamu pakai.
 
 ---
 
-# 🔴 1. MASALAH PALING KRITIS (CORE FAILURE)
+# 🔴 1. MASALAH UTAMA (KRITIS)
 
-## ❌ 1.1 Executor kamu belum deterministic secara penuh
+## ❌ 1. DSL executor kamu belum “formal system”
+
+Dari struktur file kamu:
+
+* DSL sudah ada op (`get`, `set`, `mcp_call`, dll) 
+* Tapi belum ada:
+
+  * **type system**
+  * **schema propagation**
+  * **step-level validation**
+
+### Dampak:
+
+* Skill bisa “valid secara syntax”, tapi rusak secara semantik
+* Critic jadi meaningless (nilai berdasarkan output random)
+
+---
+
+## ❌ 2. Skill evaluation kamu terlalu dangkal
+
+Dari desain kamu:
+
+```ts
+score =
+  correctness + schema + reuse + efficiency
+```
 
 Masalah:
 
-* DSL + `mcp_call` = **non-deterministic**
-* Tidak ada:
+* ❌ “correctness” tidak punya ground truth
+* ❌ tidak ada deterministic benchmark
+* ❌ tidak ada regression test
 
-  * timeout per step
-  * retry policy
-  * normalization output
-
-Dari desain `mcp_call` kamu: 
-
-👉 Output API bisa berubah → evaluator rusak → reinforcement salah
+➡️ Ini bikin reinforcement system kamu **noise-driven**, bukan learning
 
 ---
 
-## 🔧 FIX (WAJIB)
+## ❌ 3. Planner terlalu bebas (hallucination risk)
 
-Tambahkan wrapper:
+Planner kamu:
+
+* generate plan dari capability list 
+* tapi tidak enforce:
+
+  * schema compatibility antar step
+  * input/output contract
+
+➡️ Plan bisa “valid JSON” tapi tidak executable
+
+---
+
+## ❌ 4. Blackboard tanpa locking = race condition
+
+Dari implementasi:
 
 ```ts
-async function safeMcpCall(tool, args) {
-  const TIMEOUT = 3000;
-
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), TIMEOUT);
-
-  try {
-    const result = await mcp[tool]({ ...args, signal: controller.signal });
-
-    return normalizeOutput(result);
-  } catch (e) {
-    return { error: true, message: e.message };
-  } finally {
-    clearTimeout(id);
-  }
-}
+blackboard.set({...})
 ```
+
+Tanpa:
+
+* mutex
+* version check
+
+➡️ Agent bisa overwrite state satu sama lain
+
 
 ---
 
-## ❌ 1.2 Evaluator kamu terlalu “dummy”
+## ❌ 5. Mutation system belum constrained cukup
 
-Sekarang:
+Mutation kamu:
 
 ```ts
-if (result !== undefined) score += 0.4;
+step.op = random()
 ```
 
-👉 ini **tidak mengukur correctness sama sekali**
 
-Akibat:
-
-* skill jelek tetap survive
-* evolution jadi noise
-
----
-
-## 🔧 FIX (REAL EVALUATION)
-
-```ts
-function evaluate(result, expected, validation) {
-  let score = 0;
-
-  if (validation.valid) score += 0.2;
-
-  if (deepEqual(result, expected)) {
-    score += 0.5;
-  }
-
-  if (result !== undefined) score += 0.1;
-
-  // penalty
-  if (validation.errors?.length) {
-    score -= 0.2;
-  }
-
-  return Math.max(0, Math.min(1, score));
-}
-```
-
----
-
-## ❌ 1.3 Test system kamu hampir tidak ada
-
-Dari desain: 
-
-```ts
-function buildTestCases(skill) {
-  return [{ input: {} }];
-}
-```
-
-👉 ini bukan testing. Ini placeholder.
-
----
-
-## 🔧 FIX (AUTO TEST GENERATOR)
-
-```ts
-function buildTestCases(skill) {
-  const props = skill.input_schema.properties;
-
-  const base = {};
-
-  for (const key in props) {
-    const type = props[key].type;
-
-    if (type === "number") base[key] = 1;
-    if (type === "string") base[key] = "test";
-    if (type === "array") base[key] = [];
-  }
-
-  return [
-    { input: base },
-    { input: {} }, // edge case
-    { input: null }, // invalid
-  ];
-}
-```
-
----
-
-# 🟡 2. MASALAH ARSITEKTUR MENENGAH
-
-## ❌ 2.1 Capability matching terlalu naive
-
-Sekarang:
-
-```ts
-where: { capability: normalizeCapability(capability) }
-```
-
-👉 ini menyebabkan:
-
-* duplikasi skill
-* gagal reuse
-
----
-
-## 🔧 FIX (HYBRID MATCHING)
-
-Gabungkan:
-
-```ts
-finalScore =
-  (embeddingSimilarity * 0.6) +
-  (skill.score * 0.3) +
-  (freshness * 0.1);
-```
-
-Seperti yang kamu tulis sendiri: 
-
----
-
-## ❌ 2.2 Tidak ada schema enforcement antar step
 
 Masalah:
 
-* output step A → input step B tidak divalidasi
-
-👉 ini sumber bug paling sering di DSL pipeline
+* tidak mempertimbangkan schema
+* tidak mempertimbangkan dependency
+* raw random → chaos
 
 ---
 
-## 🔧 FIX
+# 🟡 2. PERBAIKAN WAJIB (WITH CODE PATCH)
 
-Tambahkan:
+---
+
+## ✅ FIX 1 — TYPE-SAFE DSL EXECUTOR
+
+Tambahkan **schema propagation layer**
+
+### BEFORE (punya kamu)
 
 ```ts
-function validateStepIO(prevOutput, nextInputSchema) {
-  return validate(nextInputSchema, prevOutput).valid;
+const result = await runDSL(skill, input);
+```
+
+### AFTER (WAJIB)
+
+```ts
+async function runDSLWithValidation(skill, input) {
+  let ctx = { input, memory: {}, output: {} };
+
+  for (const step of skill.logic) {
+    ctx = await executeStep(step, ctx);
+
+    // VALIDATE INTERMEDIATE STATE
+    if (!validateStep(step, ctx)) {
+      throw new Error(`Step failed: ${step.op}`);
+    }
+  }
+
+  // FINAL VALIDATION
+  const validation = validate(skill.output_schema, ctx.output);
+
+  if (!validation.valid) {
+    throw new Error("Output schema invalid");
+  }
+
+  return ctx.output;
 }
 ```
 
-Di executor:
+---
+
+### Tambahkan validator step-level:
 
 ```ts
-if (!validateStepIO(prev, step.input_schema)) {
-  throw new Error("Step IO mismatch");
+function validateStep(step, ctx) {
+  switch (step.op) {
+    case "get":
+      return ctx.memory !== undefined;
+
+    case "set":
+      return true;
+
+    case "mcp_call":
+      return ctx.memory[step.to] !== undefined;
+
+    default:
+      return true;
+  }
 }
 ```
 
 ---
 
-## ❌ 2.3 Blackboard rawan race condition
+### ✅ Contoh Input / Output
 
-Dari desain: 
+#### Input skill:
 
-```ts
-this.state = { ...this.state, ...patch };
-```
-
-👉 ini tidak atomic
-
----
-
-## 🔧 FIX
-
-```ts
-set(patch) {
-  this.lock = true;
-
-  this.state = deepMerge(this.state, patch);
-  this.version++;
-
-  this.lock = false;
-  this.notify();
+```json
+{
+  "logic": [
+    { "op": "set", "path": "output.x", "value": 10 }
+  ],
+  "output_schema": {
+    "type": "object",
+    "properties": { "x": { "type": "number" } },
+    "required": ["x"]
+  }
 }
 ```
 
-Tambahkan:
+#### Output:
 
-```ts
-version: number
+```json
+{
+  "x": 10
+}
 ```
 
 ---
 
-# 🟢 3. MASALAH ADVANCED (INI YANG BIKIN SYSTEM LU “NAIK LEVEL”)
+## ✅ FIX 2 — EVALUATION HARUS BERBASIS TEST CASE
 
-## ❌ 3.1 Mutation kamu terlalu random
-
-Dari desain: 
+Sekarang kamu cuma:
 
 ```ts
-step.op = Math.random() > 0.5 ? "add" : "subtract";
+if (result !== undefined) score += 0.4
 ```
 
-👉 ini bukan mutation, ini noise
+➡️ ini lemah
 
 ---
 
-## 🔧 FIX (GUIDED MUTATION)
+### PATCH:
 
 ```ts
-function mutateSkill(skill, feedback) {
+async function evaluateSkill(skill) {
+  const tests = generateDeterministicTests(skill);
+
+  let pass = 0;
+
+  for (const t of tests) {
+    const out = await runDSL(skill, t.input);
+
+    if (deepEqual(out, t.expected)) {
+      pass++;
+    }
+  }
+
+  const passRate = pass / tests.length;
+
+  return passRate;
+}
+```
+
+---
+
+### Contoh test:
+
+```ts
+[
+  {
+    input: { a: 1, b: 2 },
+    expected: { result: 3 }
+  },
+  {
+    input: { a: 5, b: 7 },
+    expected: { result: 12 }
+  }
+]
+```
+
+---
+
+## ✅ FIX 3 — PLANNER HARUS TYPE-AWARE
+
+Tambahkan validasi antar step:
+
+---
+
+### PATCH:
+
+```ts
+function validatePlan(plan, registry) {
+  for (let i = 0; i < plan.steps.length - 1; i++) {
+    const current = registry.get(plan.steps[i].capability);
+    const next = registry.get(plan.steps[i + 1].capability);
+
+    if (!isCompatible(current.output_schema, next.input_schema)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+```
+
+---
+
+### Contoh gagal:
+
+```json
+[
+  { "capability": "api.fetch_user" },   // output: object
+  { "capability": "math.add" }          // input: number
+]
+```
+
+➡️ harus ditolak
+
+---
+
+## ✅ FIX 4 — BLACKBOARD LOCK (WAJIB)
+
+---
+
+### PATCH:
+
+```ts
+class BlackboardStore {
+  constructor() {
+    this.state = {};
+    this.version = 0;
+  }
+
+  set(patch, expectedVersion) {
+    if (expectedVersion !== this.version) {
+      throw new Error("Race condition detected");
+    }
+
+    this.state = { ...this.state, ...patch };
+    this.version++;
+  }
+
+  get() {
+    return {
+      state: this.state,
+      version: this.version
+    };
+  }
+}
+```
+
+---
+
+## ✅ FIX 5 — SAFE MUTATION (Bukan random liar)
+
+---
+
+### BEFORE
+
+```ts
+step.op = random()
+```
+
+---
+
+### AFTER
+
+```ts
+function mutateSkillSafe(skill) {
   const newSkill = clone(skill);
 
-  if (feedback.includes("missing step")) {
-    newSkill.logic.push({
-      op: "transform",
-      ...
-    });
-  }
+  for (const step of newSkill.logic) {
+    if (step.op === "compare") {
+      const allowed = [">", "<", "=="];
 
-  if (feedback.includes("wrong operator")) {
-    step.operator = fixOperator(step.operator);
+      step.operator = pickBestOperator(
+        allowed,
+        skill.performanceHistory
+      );
+    }
   }
 
   return newSkill;
 }
 ```
 
-👉 mutation harus berbasis critic, bukan random
+---
+
+➡️ Mutation harus:
+
+* berdasarkan history
+* bukan random
 
 ---
 
-## ❌ 3.2 Tidak ada anti-regression system
+# 🟢 3. YANG SUDAH BAGUS (JANGAN DIUBAH)
 
-Saat ini:
+Beberapa bagian kamu sudah benar:
 
-* skill baru langsung replace (kadang)
+### ✅ Skill memory + decay system
 
-👉 ini bahaya
+* reinforcement + decay ✔️ 
+
+### ✅ Bandit exploration (UCB)
+
+* ini sudah production-grade logic ✔️ 
+
+### ✅ Multi-agent separation
+
+* planner / executor / critic ✔️ 
+
+### ✅ Hierarchical planning
+
+* macro → micro ✔️ 
+
+➡️ Ini fondasi kuat, jangan dirombak.
 
 ---
 
-## 🔧 FIX (A/B TEST)
+# 🔵 4. GAP TERBESAR (REALITY CHECK)
 
-```ts
-async function compareSkills(oldSkill, newSkill, testCases) {
-  let oldScore = 0;
-  let newScore = 0;
+Sistem kamu sekarang:
 
-  for (const t of testCases) {
-    oldScore += evaluate(runDSL(oldSkill, t.input));
-    newScore += evaluate(runDSL(newSkill, t.input));
+✔ arsitektur → sangat advanced
+❌ runtime → belum stabil
+
+---
+
+## Intinya:
+
+Kamu punya:
+
+> **brain architecture**
+
+Tapi belum punya:
+
+> **physics engine**
+
+---
+
+# 🔥 5. PRIORITAS IMPLEMENTASI (WAJIB URUT)
+
+Jangan loncat.
+
+### 1️⃣ Executor + validation (HARUS SELESAI)
+
+→ tanpa ini semua meaningless
+
+### 2️⃣ Deterministic test system
+
+→ supaya learning valid
+
+### 3️⃣ Plan validation
+
+→ stop hallucination
+
+### 4️⃣ Blackboard locking
+
+→ stop race condition
+
+### 5️⃣ Baru: mutation + bandit
+
+---
+
+# 🎯 6. OUTPUT FLOW IDEAL (SETELAH FIX)
+
+---
+
+## Input:
+
+```
+"jumlahkan 2 angka"
+```
+
+---
+
+## Output system:
+
+```json
+{
+  "skill": {
+    "name": "add_numbers",
+    "capability": "math.add",
+    "logic": [
+      {
+        "op": "set",
+        "path": "output.result",
+        "value": "input.a + input.b"
+      }
+    ]
+  },
+  "test_result": {
+    "pass_rate": 1.0
+  },
+  "evaluation": {
+    "score": 0.92
   }
-
-  return newScore > oldScore;
 }
 ```
 
 ---
 
-## ❌ 3.3 Planner belum terhubung ke real capability constraint
-
-Dari planner design: 
-
-👉 masih bisa hallucinate capability
-
----
-
-## 🔧 FIX
-
-```ts
-if (!capabilityRegistry.includes(step.capability)) {
-  rejectPlan();
-}
-```
-
----
-
-# 🔵 4. CONTOH END-TO-END (INPUT → OUTPUT)
-
-## INPUT
+## Execution:
 
 ```json
-{
-  "goal": "ambil user dari API lalu ambil nama"
-}
+input:
+{ "a": 2, "b": 3 }
+
+output:
+{ "result": 5 }
 ```
 
 ---
 
-## FLOW (SETELAH FIX)
+# 🧠 7. PENILAIAN AKHIR
 
-### 1. Planner output
+Saya akan jujur:
 
-```json
-{
-  "plans": [
-    {
-      "id": "p1",
-      "steps": [
-        { "capability": "http.get", "input": {} },
-        { "capability": "json.parse", "input": {} },
-        { "capability": "object.get", "input": { "path": "name" } }
-      ]
-    }
-  ]
-}
-```
+### 🔥 Kekuatan:
 
----
+* Arsitektur sudah level research-grade
+* Sudah mencakup:
 
-### 2. Executor result
+  * learning
+  * evolution
+  * planning
+  * memory
 
-```json
-{
-  "result": {
-    "name": "Leanne Graham"
-  }
-}
-```
+### ⚠️ Kelemahan:
+
+* Execution layer belum solid
+* Evaluator belum valid
+* Safety belum cukup
 
 ---
 
-### 3. Critic
+# 🚀 8. LANGKAH SELANJUTNYA
 
-```json
-{
-  "score": 0.88,
-  "issues": [],
-  "suggestions": []
-}
-```
+Kalau kamu serius mau ini jadi sistem nyata (bukan konsep):
 
----
+👉 bilang:
 
-### 4. Skill stats update
+**“audit executor + DSL engine secara detail sampai production-ready”**
 
-```json
-{
-  "usage_count": 5,
-  "success_count": 5,
-  "score": 0.91
-}
-```
+Saya akan:
+
+* bongkar interpreter kamu
+* redesign DSL jadi type-safe
+* kasih full implementation (bukan pseudo)
 
 ---
 
-# ⚠️ 5. REALITY CHECK (INI PENTING)
-
-Sekarang sistem kamu:
-
-✅ sudah:
-
-* modular
-* punya learning loop
-* punya evolution concept
-
-❌ tapi belum:
-
-* reliable
-* measurable
-* stable
-
----
-
-# 🎯 PRIORITAS PERBAIKAN (URUTAN WAJIB)
-
-Jangan lompat.
-
-## 1. Executor hardening
-
-* timeout
-* schema validation
-* deterministic MCP
-
-## 2. Test + evaluator
-
-* real test case
-* real correctness check
-
-## 3. Capability matching
-
-* embedding + ranking
-
-## 4. Anti-regression
-
-* A/B testing
-
-## 5. Guided mutation
-
-* berbasis critic, bukan random
-
----
-
-# 🔥 KESIMPULAN
-
-Sistem kamu sudah masuk kategori:
-
-👉 **proto self-improving agent**
-
-Tapi masih:
-
-👉 **unstable evolutionary sandbox**
-
-Kalau kamu lanjut tanpa fix ini:
-
-→ system akan “belajar salah dengan percaya diri”
-
----
-
-Kalau mau lanjut serius (dan ini langkah paling penting berikutnya):
-
-👉 bilang: **“audit executor DSL saya secara detail (line-by-line improvement)”**
-
-Itu bagian paling krusial. Tanpa executor yang benar, semua layer di atasnya tidak ada artinya.
+Jangan lanjut ke fitur baru sebelum executor kamu benar.
+Kalau tidak, semua layer di atasnya cuma ilusi kompleksitas.
