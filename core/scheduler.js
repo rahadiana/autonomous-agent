@@ -1,3 +1,112 @@
+export const Status = {
+  PLANNING: "planning",
+  EXECUTING: "executing",
+  CRITIC: "critic",
+  RETRY: "retry",
+  ERROR: "error",
+  DONE: "done"
+};
+
+export class ControlScheduler {
+  constructor(blackboard, options = {}) {
+    this.blackboard = blackboard;
+    this.maxCycles = options.maxCycles || 100;
+    this.cycleDelay = options.cycleDelay || 100;
+    this.agents = new Map();
+    this.running = false;
+    this.currentAgent = null;
+  }
+
+  registerAgent(name, handler) {
+    this.agents.set(name, handler);
+  }
+
+  async selectAgent() {
+    const currentStatus = this.blackboard.getStatus();
+    
+    const agentPriority = {
+      [Status.PLANNING]: ["planner"],
+      [Status.EXECUTING]: ["executor"],
+      [Status.CRITIC]: ["critic"],
+      [Status.RETRY]: ["executor", "planner"],
+      [Status.ERROR]: ["recovery"],
+      [Status.DONE]: []
+    };
+
+    const priorities = agentPriority[currentStatus] || [];
+    
+    for (const agentName of priorities) {
+      if (this.agents.has(agentName)) {
+        return agentName;
+      }
+    }
+
+    return priorities[0] || null;
+  }
+
+  async run() {
+    this.running = true;
+    let cycle = 0;
+
+    while (this.running && cycle < this.maxCycles) {
+      const status = this.blackboard.getStatus();
+      
+      if (status === Status.DONE) {
+        break;
+      }
+
+      const agentName = await this.selectAgent();
+      
+      if (!agentName) {
+        this.running = false;
+        break;
+      }
+
+      const agent = this.agents.get(agentName);
+      this.currentAgent = agentName;
+
+      try {
+        await agent(this.blackboard);
+      } catch (err) {
+        this.blackboard.setStatus(Status.ERROR, err.message);
+      }
+
+      if (this.blackboard.isTimeout()) {
+        this.running = false;
+        break;
+      }
+
+      cycle++;
+      
+      if (this.cycleDelay > 0) {
+        await new Promise(r => setTimeout(r, this.cycleDelay));
+      }
+    }
+
+    return {
+      cycles: cycle,
+      status: this.blackboard.getStatus(),
+      converged: this.blackboard.getStatus() === Status.DONE
+    };
+  }
+
+  stop() {
+    this.running = false;
+  }
+
+  getCurrentAgent() {
+    return this.currentAgent;
+  }
+
+  isRunning() {
+    return this.running;
+  }
+}
+
+export function createControlScheduler(blackboard, options = {}) {
+  return new ControlScheduler(blackboard, options);
+}
+
 export const Priority = {
   CRITICAL: 100,
   HIGH: 75,
