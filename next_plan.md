@@ -1,56 +1,393 @@
-Saya sudah “scan” isi arsitektur + modul yang kamu kirim. Secara jujur: **ini sudah di atas rata-rata**, tapi masih ada gap kritis yang bikin sistem kamu belum benar-benar *robust autonomous system*, masih “semi-simulasi”.
+Saya sudah baca seluruh isi arsitektur + modul yang kamu upload. Saya tidak akan basa-basi: **sistem kamu sudah sangat ambisius, tapi masih belum “tight system”**. Banyak bagian sudah benar secara konsep, tapi belum terkunci secara operasional — ini yang bikin nanti gagal di production.
 
-Saya akan fokus ke kritik yang *langsung bisa kamu implement*, bukan teori.
+Di bawah ini kritik **berdasarkan gap nyata**, bukan teori.
 
 ---
 
-# 🔴 1. MASALAH PALING FATAL (CORE SYSTEM GAP)
+# 🔴 1. MASALAH UTAMA: ARSITEKTUR KAMU “KELEBIHAN FITUR, KURANG CONTROL”
 
-## ❌ 1. Evaluator kamu masih “proxy-based”, bukan grounded
+Dari semua file:
 
-Dari desain kamu:
+* ada **planner (hierarchical + tree + critic)**
+* ada **multi-agent + blackboard**
+* ada **skill evolution + bandit + mutation**
+* ada **goal autonomy + curiosity**
+* ada **code generation + sandbox**
 
-```ts
-if (validation.valid) score += 0.2;
-if (result !== undefined) score += 0.4;
-```
+👉 Ini bukan masalah kecil. Ini masalah desain:
+
+> ❗ Kamu bangun level AGI-like architecture, tapi **control loop & invariants belum solid**
+
+Akibatnya:
+
+* sistem akan **chaotic**
+* sulit debug
+* learning noise > learning signal
+
+---
+
+# 🔴 2. BLACKBOARD SYSTEM MASIH “NAIF”
+
+Dari implementasi kamu: 
 
 Masalah:
 
-* Ini bukan correctness → ini cuma “ada output”
-* Agent bisa “cheat” → output asal tapi valid schema
-* Tidak ada *task-grounded evaluation*
+### ❌ Tidak ada versioning state
 
-👉 Dampak:
+```ts
+this.state = { ...this.state, ...patch };
+```
 
-* Skill jelek tetap survive
-* Reinforcement jadi noise
+👉 overwrite langsung → race condition + lost update
 
 ---
 
-## ✅ FIX: Grounded Evaluator (WAJIB)
+## ✅ FIX (WAJIB)
 
-Tambahkan **expected output / oracle check**
-
-### PATCH:
+Tambahkan version + atomic update:
 
 ```ts
-function evaluateWithGroundTruth(result, expected, validation) {
+class BlackboardStore {
+  constructor() {
+    this.state = {};
+    this.version = 0;
+    this.listeners = [];
+  }
+
+  get() {
+    return {
+      ...this.state,
+      __version: this.version
+    };
+  }
+
+  set(patch) {
+    this.version++;
+
+    this.state = {
+      ...this.state,
+      ...patch,
+      __version: this.version
+    };
+
+    this.notify();
+  }
+}
+```
+
+---
+
+## ❌ Tidak ada locking / phase guard
+
+Planner, Executor, Critic bisa overlap.
+
+---
+
+## ✅ FIX
+
+```ts
+let processing = false;
+
+blackboard.subscribe(async (state) => {
+  if (processing) return;
+
+  processing = true;
+
+  try {
+    await handler(state);
+  } finally {
+    processing = false;
+  }
+});
+```
+
+---
+
+# 🔴 3. SKILL SYSTEM SUDAH ADA, TAPI BELUM “COMPETITIVE SYSTEM”
+
+Dari file skill memory: 
+
+Masalah:
+
+### ❌ Ranking belum unify
+
+* similarity
+* score
+* freshness
+* bandit
+
+masih tercerai
+
+---
+
+## ✅ FIX: SATU FUNGSI RANKING
+
+```ts
+function computeFinalScore(skill, similarity, totalSelections) {
+  const bandit = banditScore(skill, totalSelections);
+
+  const freshnessScore = freshness(skill);
+
+  return (
+    similarity * 0.4 +
+    skill.score * 0.3 +
+    bandit * 0.2 +
+    freshnessScore * 0.1
+  );
+}
+```
+
+---
+
+## ❌ Belum ada “selection pressure”
+
+Skill jelek masih hidup lama.
+
+---
+
+## ✅ FIX: HARD PRUNING
+
+```ts
+async function aggressivePrune() {
+  await Skill.destroy({
+    where: {
+      score: { [Op.lt]: 0.4 },
+      usage_count: { [Op.lt]: 5 }
+    }
+  });
+}
+```
+
+---
+
+# 🔴 4. MUTATION SYSTEM MASIH TERLALU “RANDOM”
+
+Dari mutation: 
+
+Masalah:
+
+```ts
+const idx = Math.floor(Math.random() * newSkill.logic.length);
+```
+
+👉 ini pure random → noise generator
+
+---
+
+## ✅ FIX: GUIDED MUTATION
+
+```ts
+function mutateSkill(skill) {
+  const newSkill = structuredClone(skill);
+
+  const problematicSteps = skill.logic.filter(s => s.error_rate > 0.3);
+
+  const target =
+    problematicSteps.length > 0
+      ? problematicSteps[Math.floor(Math.random() * problematicSteps.length)]
+      : skill.logic[Math.floor(Math.random() * skill.logic.length)];
+
+  // mutate hanya bagian bermasalah
+}
+```
+
+---
+
+# 🔴 5. PLANNER TERLALU “LLM HEAVY”, KURANG CONSTRAINT
+
+Dari planner loop: 
+
+Masalah:
+
+### ❌ capability hallucination risk
+
+Planner bebas generate:
+
+```json
+{ "capability": "something.random" }
+```
+
+---
+
+## ✅ FIX: HARD VALIDATION
+
+```ts
+function validatePlan(plan, capabilities) {
+  for (const step of plan.steps) {
+    if (!capabilities.includes(step.capability)) {
+      return false;
+    }
+  }
+  return true;
+}
+```
+
+---
+
+## ❌ Tidak ada penalti plan panjang
+
+---
+
+## ✅ FIX:
+
+```ts
+score -= plan.steps.length * 0.05;
+```
+
+---
+
+# 🔴 6. EXECUTOR MASIH BERBAHAYA (DSL + VM)
+
+Dari MCP + VM:  
+
+Masalah:
+
+### ❌ Tidak ada timeout global DSL
+
+---
+
+## ✅ FIX
+
+```ts
+async function runDSLWithTimeout(skill, input, timeout = 200) {
+  return Promise.race([
+    runDSL(skill, input),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("DSL timeout")), timeout)
+    )
+  ]);
+}
+```
+
+---
+
+### ❌ Tidak ada step limit
+
+---
+
+## ✅ FIX
+
+```ts
+const MAX_STEPS = 20;
+
+for (let i = 0; i < skill.logic.length; i++) {
+  if (i > MAX_STEPS) throw new Error("Step overflow");
+}
+```
+
+---
+
+# 🔴 7. GOAL SYSTEM = PALING BERBAHAYA
+
+Dari curiosity system: 
+
+Masalah:
+
+### ❌ Goal explosion
+
+```ts
+bb.goals.push(...newGoals);
+```
+
+---
+
+## ✅ FIX: HARD LIMIT + FILTER
+
+```ts
+function addGoals(bb, newGoals) {
+  const filtered = newGoals.filter(g => g.priority > 0.6);
+
+  bb.goals = dedupeGoals([...bb.goals, ...filtered])
+    .sort((a, b) => b.priority - a.priority)
+    .slice(0, 20);
+}
+```
+
+---
+
+### ❌ Tidak ada “goal value vs cost”
+
+---
+
+## ✅ FIX
+
+```ts
+g.priority = g.priority / estimatedCost(g);
+```
+
+---
+
+# 🔴 8. SYSTEM KAMU BELUM PUNYA “GLOBAL CONTROL LOOP”
+
+Ini akar semua masalah.
+
+Sekarang:
+
+* scheduler
+* planner
+* mutation
+* goal generator
+
+👉 semua jalan sendiri
+
+---
+
+## ✅ FIX: MASTER CONTROL LOOP
+
+```ts
+async function systemTick() {
+  // 1. goal management
+  await goalManager();
+
+  // 2. planning
+  await plannerPhase();
+
+  // 3. execution
+  await executorPhase();
+
+  // 4. evaluation
+  await criticPhase();
+
+  // 5. learning
+  await updateSkillStats();
+
+  // 6. evolution
+  await maybeMutate();
+
+  // 7. cleanup
+  await pruneSkills();
+}
+```
+
+👉 Semua harus lewat ini. Bukan event liar.
+
+---
+
+# 🔴 9. YANG PALING KRITIS: KAMU BELUM PUNYA “METRIC KEBENARAN”
+
+Evaluator kamu masih:
+
+```ts
+if (result !== undefined) score += 0.4;
+```
+
+👉 ini **sangat lemah**
+
+---
+
+## ✅ FIX: REAL EVALUATION
+
+```ts
+function evaluate(result, expected, validation) {
   let score = 0;
 
   if (validation.valid) score += 0.2;
 
-  // HARD CHECK (ini yang kamu belum punya)
   if (deepEqual(result, expected)) {
     score += 0.6;
   }
 
-  // partial match (optional)
-  else if (partialMatch(result, expected)) {
-    score += 0.3;
-  }
-
-  score += 0.2; // efficiency/reuse proxy
+  if (executionTime < 50) score += 0.2;
 
   return score;
 }
@@ -58,399 +395,60 @@ function evaluateWithGroundTruth(result, expected, validation) {
 
 ---
 
-## ❌ 2. Test Generator kamu terlalu lemah
+# 🔴 10. PRIORITAS IMPLEMENTASI (JANGAN NGACO LONCAT)
 
-Sekarang:
+Kalau kamu lanjut tanpa urutan ini → sistem hancur:
 
-```ts
-[{ input: {} }]
-```
+### PRIORITAS WAJIB:
 
-Ini tidak valid untuk sistem learning.
-
-👉 Agent kamu **tidak benar-benar belajar**, cuma lewat satu kasus trivial.
-
----
-
-## ✅ FIX: Structured Test Generator
-
-Tambahkan 3 layer test:
-
-```ts
-function buildTestCases(skill) {
-  return [
-    // normal case
-    { input: generateValidInput(skill), expected: generateExpected(skill) },
-
-    // edge case
-    { input: generateEdgeCase(skill), expected: ... },
-
-    // invalid case
-    { input: generateInvalidInput(skill), expect_error: true }
-  ];
-}
-```
+1. **Executor + Validator solid**
+2. **Skill scoring + pruning**
+3. **Planner constraint (anti hallucination)**
+4. **Blackboard locking + versioning**
+5. **Global control loop**
 
 ---
 
-## ❌ 3. Tidak ada “task grounding”
+### JANGAN SENTUH DULU:
 
-Semua evaluasi kamu:
+* curiosity system ❌
+* self-modifying code ❌
+* imagination engine ❌
 
-* internal
-* self-referential
-
-👉 Tidak ada koneksi ke **real-world correctness**
-
----
-
-## ✅ FIX: External Grounding Layer
-
-Tambahkan:
-
-```ts
-async function externalValidation(result, taskType) {
-  switch (taskType) {
-    case "math":
-      return verifyMath(result);
-
-    case "api":
-      return compareWithAPI(result);
-
-    case "text":
-      return semanticSimilarity(result);
-
-    default:
-      return true;
-  }
-}
-```
+👉 itu semua butuh foundation stabil
 
 ---
 
-# 🔴 2. MASALAH DI LEARNING SYSTEM
+# 🧠 KESIMPULAN (REAL TALK)
 
-Kamu sudah punya:
+Sistem kamu sekarang:
 
-* reinforcement
-* decay
-* versioning
+👉 **80% arsitektur, 20% sistem nyata**
 
-Bagus, tapi masih ada flaw.
+Masalahnya:
 
----
+* terlalu cepat naik level
+* belum ada control & invariants
 
-## ❌ 4. Score kamu bisa bias (feedback loop rusak)
+Kalau dipaksa jalan sekarang:
 
-```ts
-newScore =
-  (skill.score * 0.7) +
-  (successRate * 0.3);
-```
-
-Masalah:
-
-* early lucky skill → dominan
-* exploration jadi mati
+> ❌ bukan jadi AI pintar
+> ❌ tapi jadi sistem random generator yang terlihat pintar
 
 ---
 
-## ✅ FIX: Bayesian Update (lebih stabil)
+# 🚀 NEXT STEP (SAYA SARANKAN PALING KRITIS)
 
-```ts
-function bayesianScore(skill) {
-  const alpha = skill.success_count + 1;
-  const beta = skill.failure_count + 1;
+Pilih salah satu:
 
-  return alpha / (alpha + beta);
-}
-```
+1. **“fix executor + validator sampai production-grade”**
+2. **“bangun global control loop + lifecycle management”**
+3. **“buat test system yang benar-benar kuat (bukan dummy)”**
 
 ---
 
-## ❌ 5. Decay kamu terlalu “time-based only”
+Kalau kamu mau, saya bisa:
 
-```ts
-Math.exp(-0.05 * daysIdle)
-```
+👉 bongkar repo kamu file-by-file dan kasih patch langsung (bukan teori)
 
-Masalah:
-
-* skill bagus tapi jarang dipakai → mati
-* skill buruk tapi sering dipakai → hidup
-
----
-
-## ✅ FIX: Quality-aware decay
-
-```ts
-const decayFactor =
-  Math.exp(-0.05 * daysIdle) *
-  (0.5 + skill.score);
-```
-
----
-
-# 🔴 3. MASALAH DI PLANNER + EXECUTION
-
-## ❌ 6. Planner tidak aware terhadap failure history
-
-Planner kamu:
-
-* tidak tahu skill mana sering gagal
-
-👉 Ini fatal.
-
----
-
-## ✅ FIX: Failure-aware planning
-
-Tambahkan ke context:
-
-```ts
-context: {
-  failed_skills: await getFailingSkills(),
-  success_patterns: await getSuccessfulPatterns()
-}
-```
-
----
-
-## ❌ 7. Tidak ada constraint propagation antar step
-
-Di hierarchical planner:
-
-* output subgoal tidak divalidasi ke subgoal berikutnya
-
-👉 menyebabkan:
-
-* context drift 
-
----
-
-## ✅ FIX: Schema propagation
-
-```ts
-function validateStepCompatibility(prevOutput, nextInputSchema) {
-  return ajv.validate(nextInputSchema, prevOutput);
-}
-```
-
----
-
-# 🔴 4. MASALAH DI DSL EXECUTOR
-
-## ❌ 8. Tidak ada step-level validation
-
-Sekarang:
-
-* hanya validate final output
-
-👉 kalau step tengah salah → tidak ketahuan
-
----
-
-## ✅ FIX: Step validation hook
-
-```ts
-for (const step of skill.logic) {
-  await executeStep(step, ctx);
-
-  if (!validateIntermediate(ctx)) {
-    throw new Error("Invalid intermediate state");
-  }
-}
-```
-
----
-
-## ❌ 9. MCP tidak deterministic
-
-Dari desain kamu:
-
-* HTTP call langsung
-
-👉 ini bikin:
-
-* evaluation bias
-* non-reproducible
-
----
-
-## ✅ FIX: MCP caching layer
-
-```ts
-const cache = new Map();
-
-async function cachedMcpCall(tool, args) {
-  const key = JSON.stringify({ tool, args });
-
-  if (cache.has(key)) return cache.get(key);
-
-  const result = await mcp[tool](args);
-
-  cache.set(key, result);
-  return result;
-}
-```
-
----
-
-# 🔴 5. MASALAH ARSITEKTUR BESAR
-
-## ❌ 10. Sistem kamu belum punya “failure memory”
-
-Padahal kamu sudah punya episodic memory 
-
-Tapi belum dipakai untuk:
-
-* avoid bad plan
-* avoid bad skill
-
----
-
-## ✅ FIX: Failure Memory
-
-```ts
-await saveEpisode({
-  goal,
-  plan,
-  result,
-  success: false,
-  error
-});
-```
-
-Lalu di planner:
-
-```ts
-if (similarFailureExists(goal)) {
-  avoidPattern(plan);
-}
-```
-
----
-
-## ❌ 11. Mutation kamu masih random
-
-Dari design mutation :
-
-* random tweak
-
-👉 ini inefficient
-
----
-
-## ✅ FIX: Guided mutation
-
-```ts
-function mutateWithFeedback(skill, issues) {
-  if (issues.includes("missing step")) {
-    return addStep(skill);
-  }
-
-  if (issues.includes("wrong operator")) {
-    return fixOperator(skill);
-  }
-
-  return randomMutation(skill);
-}
-```
-
----
-
-# 🔴 6. MASALAH PALING DALAM (INI YANG BANYAK ORANG GAGAL)
-
-## ❌ 12. Sistem kamu belum punya “objective consistency”
-
-Semua layer:
-
-* planner
-* evaluator
-* critic
-
-punya definisi “good” yang beda-beda.
-
-👉 Ini bikin:
-
-* learning tidak konvergen
-
----
-
-## ✅ FIX: Unified scoring function
-
-Semua pakai:
-
-```ts
-score =
-  correctness * 0.5 +
-  reliability * 0.2 +
-  efficiency * 0.15 +
-  generalization * 0.15;
-```
-
----
-
-# 🧠 RINGKASAN KRITIS
-
-Kalau diringkas:
-
-### Yang sudah bagus:
-
-* arsitektur modular (planner, executor, critic) 
-* blackboard + scheduler 
-* evolution system (mutation + bandit) 
-
----
-
-### Yang masih lemah (ini blocker):
-
-1. ❌ evaluator tidak grounded
-2. ❌ test generator lemah
-3. ❌ tidak ada failure memory
-4. ❌ planner tidak aware history
-5. ❌ MCP tidak deterministic
-6. ❌ mutation masih random
-7. ❌ scoring tidak konsisten
-
----
-
-# 🚀 PRIORITAS IMPLEMENTASI (URUTAN WAJIB)
-
-Jangan lompat.
-
-### 1. 🔥 Grounded evaluator + test generator
-
-👉 ini paling penting
-
-### 2. 🔥 Failure memory + planner awareness
-
-### 3. 🔥 Deterministic MCP (cache + replay)
-
-### 4. 🔥 Guided mutation
-
-### 5. 🔥 Unified scoring
-
----
-
-# ⚠️ REALITY CHECK
-
-Sekarang sistem kamu:
-
-👉 **adaptive system (lumayan cerdas)**
-
-Belum:
-
-👉 **reliable autonomous agent**
-
----
-
-Kalau kamu mau saya lanjut lebih tajam:
-
-👉 bilang: **“audit evaluator + test generator secara ekstrem”**
-
-Saya bisa bedah sampai level:
-
-* bagaimana generate expected output otomatis
-* bagaimana bikin evaluator tahan terhadap cheating agent
-* sampai level hampir “research-grade” evaluation system
+Tapi saya akan keras: kalau fondasi belum bener, saya akan suruh kamu rollback fitur.
