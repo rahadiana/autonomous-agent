@@ -1,382 +1,450 @@
-Saya sudah baca struktur yang kamu bangun dari file-file yang kamu kirim. Ini bukan project biasa — ini sudah menuju **cognitive agent architecture**, tapi masih ada gap besar antara **desain (dokumen)** vs **runtime nyata**.
+Saya sudah baca struktur arsitektur yang kamu bangun dari file–file yang kamu kirim (planner, DSL, executor, mutation, blackboard, dll). Saya tidak akan basa-basi: **arahnya sudah benar, tapi implementasi kamu masih “pseudo-intelligence”, belum jadi system yang stabil**.
 
-Saya akan langsung ke inti:
-👉 apa yang sudah benar
-👉 apa yang rusak / belum nyambung
-👉 perbaikan konkret + kode
-👉 contoh input/output
+Saya breakdown secara brutal + actionable.
 
 ---
 
-# 🧠 1. MASALAH UTAMA (ROOT CAUSE)
+# 🔴 1. MASALAH PALING KRITIS (CORE FAILURE)
 
-Masalah terbesar kamu:
-
-> ❌ semua komponen sudah ada di dokumen
-> ❌ tapi belum terintegrasi sebagai **closed-loop system**
-
-Contoh dari file kamu:
-
-* Skill memory + reinforcement ✔ 
-* Bandit + mutation ✔ 
-* Planner + critic ✔ 
-* Blackboard ✔ 
-* Hierarchical planning ✔ 
-
-👉 Tapi:
-
-**tidak ada satu runtime pipeline yang mengikat semuanya**
-
----
-
-# ⚠️ 2. KRITIK PALING KRITIS
-
-## ❌ (A) EXECUTOR BELUM JADI “SINGLE SOURCE OF TRUTH”
-
-Sekarang kamu punya:
-
-* DSL executor
-* sandbox code executor
-* MCP executor
+## ❌ 1.1 Executor kamu belum deterministic secara penuh
 
 Masalah:
-👉 tidak ada unified execution layer
+
+* DSL + `mcp_call` = **non-deterministic**
+* Tidak ada:
+
+  * timeout per step
+  * retry policy
+  * normalization output
+
+Dari desain `mcp_call` kamu: 
+
+👉 Output API bisa berubah → evaluator rusak → reinforcement salah
 
 ---
 
-## ✅ FIX
+## 🔧 FIX (WAJIB)
 
-Gabungkan semua:
+Tambahkan wrapper:
 
 ```ts
-async function executeCapability(capability, input) {
-  // 1. cari code module terbaik
-  const code = await findBestCode(capability);
+async function safeMcpCall(tool, args) {
+  const TIMEOUT = 3000;
 
-  if (code) {
-    try {
-      return await runInSandbox(code, input);
-    } catch {}
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), TIMEOUT);
+
+  try {
+    const result = await mcp[tool]({ ...args, signal: controller.signal });
+
+    return normalizeOutput(result);
+  } catch (e) {
+    return { error: true, message: e.message };
+  } finally {
+    clearTimeout(id);
   }
-
-  // 2. fallback ke DSL
-  const skill = await getBestSkillVersion(capability);
-
-  if (skill) {
-    return await runDSL(skill.json, input);
-  }
-
-  throw new Error("No executable capability");
 }
 ```
 
 ---
 
-## ❌ (B) SKILL SELECTION MASIH NAIF
+## ❌ 1.2 Evaluator kamu terlalu “dummy”
 
-Kamu hanya pakai:
+Sekarang:
 
 ```ts
-sort by score
+if (result !== undefined) score += 0.4;
 ```
 
-Padahal kamu sudah define:
+👉 ini **tidak mengukur correctness sama sekali**
+
+Akibat:
+
+* skill jelek tetap survive
+* evolution jadi noise
+
+---
+
+## 🔧 FIX (REAL EVALUATION)
+
+```ts
+function evaluate(result, expected, validation) {
+  let score = 0;
+
+  if (validation.valid) score += 0.2;
+
+  if (deepEqual(result, expected)) {
+    score += 0.5;
+  }
+
+  if (result !== undefined) score += 0.1;
+
+  // penalty
+  if (validation.errors?.length) {
+    score -= 0.2;
+  }
+
+  return Math.max(0, Math.min(1, score));
+}
+```
+
+---
+
+## ❌ 1.3 Test system kamu hampir tidak ada
+
+Dari desain: 
+
+```ts
+function buildTestCases(skill) {
+  return [{ input: {} }];
+}
+```
+
+👉 ini bukan testing. Ini placeholder.
+
+---
+
+## 🔧 FIX (AUTO TEST GENERATOR)
+
+```ts
+function buildTestCases(skill) {
+  const props = skill.input_schema.properties;
+
+  const base = {};
+
+  for (const key in props) {
+    const type = props[key].type;
+
+    if (type === "number") base[key] = 1;
+    if (type === "string") base[key] = "test";
+    if (type === "array") base[key] = [];
+  }
+
+  return [
+    { input: base },
+    { input: {} }, // edge case
+    { input: null }, // invalid
+  ];
+}
+```
+
+---
+
+# 🟡 2. MASALAH ARSITEKTUR MENENGAH
+
+## ❌ 2.1 Capability matching terlalu naive
+
+Sekarang:
+
+```ts
+where: { capability: normalizeCapability(capability) }
+```
+
+👉 ini menyebabkan:
+
+* duplikasi skill
+* gagal reuse
+
+---
+
+## 🔧 FIX (HYBRID MATCHING)
+
+Gabungkan:
 
 ```ts
 finalScore =
-  similarity * 0.6 +
-  skill.score * 0.3 +
-  freshness * 0.1
+  (embeddingSimilarity * 0.6) +
+  (skill.score * 0.3) +
+  (freshness * 0.1);
 ```
 
-👉 tapi belum dipakai runtime
+Seperti yang kamu tulis sendiri: 
 
 ---
 
-## ✅ FIX (WAJIB)
-
-```ts
-async function selectSkill(inputEmbedding) {
-  const skills = await vectorSearch(inputEmbedding);
-
-  return skills
-    .map(s => ({
-      skill: s,
-      score:
-        cosine(inputEmbedding, s.embedding) * 0.6 +
-        s.score * 0.3 +
-        freshness(s) * 0.1
-    }))
-    .sort((a, b) => b.score - a.score)[0].skill;
-}
-```
-
----
-
-## ❌ (C) MUTATION TIDAK TERHUBUNG KE REAL FEEDBACK
+## ❌ 2.2 Tidak ada schema enforcement antar step
 
 Masalah:
 
-```ts
-if (shouldExplore()) mutate()
-```
+* output step A → input step B tidak divalidasi
 
-👉 ini random, bukan adaptive
+👉 ini sumber bug paling sering di DSL pipeline
 
 ---
 
-## ✅ FIX (TRIGGER BERBASIS FAILURE)
+## 🔧 FIX
+
+Tambahkan:
 
 ```ts
-function shouldMutate(skill) {
-  const failRate =
-    skill.failure_count / (skill.usage_count + 1);
+function validateStepIO(prevOutput, nextInputSchema) {
+  return validate(nextInputSchema, prevOutput).valid;
+}
+```
 
-  return failRate > 0.3;
+Di executor:
+
+```ts
+if (!validateStepIO(prev, step.input_schema)) {
+  throw new Error("Step IO mismatch");
 }
 ```
 
 ---
 
-## ❌ (D) BLACKBOARD BELUM JADI CENTRAL CONTROL
+## ❌ 2.3 Blackboard rawan race condition
 
-Dari file kamu: 
+Dari desain: 
 
-Sudah ada blackboard, tapi:
+```ts
+this.state = { ...this.state, ...patch };
+```
 
-👉 executor, skill system, dan memory belum write ke situ
+👉 ini tidak atomic
 
 ---
 
-## ✅ FIX
-
-Tambahkan integrasi:
+## 🔧 FIX
 
 ```ts
-blackboard.set({
-  execution: {
-    result,
-    trace
-  }
-});
+set(patch) {
+  this.lock = true;
 
-blackboard.set({
-  memory: {
-    last_skill: skill.id
-  }
-});
+  this.state = deepMerge(this.state, patch);
+  this.version++;
+
+  this.lock = false;
+  this.notify();
+}
+```
+
+Tambahkan:
+
+```ts
+version: number
 ```
 
 ---
 
-# 🧠 3. MASALAH LEVEL ARSITEKTUR
+# 🟢 3. MASALAH ADVANCED (INI YANG BIKIN SYSTEM LU “NAIK LEVEL”)
 
-## ❌ kamu punya SEMUA komponen canggih
+## ❌ 3.1 Mutation kamu terlalu random
 
-## ❌ tapi belum punya PRIORITY LAYER
+Dari desain: 
 
-Padahal kamu sudah define scheduler: 
+```ts
+step.op = Math.random() > 0.5 ? "add" : "subtract";
+```
 
-👉 tapi belum jadi orchestrator utama
+👉 ini bukan mutation, ini noise
 
 ---
 
-## ✅ FIX: JADIKAN SCHEDULER SEBAGAI ENTRY POINT
+## 🔧 FIX (GUIDED MUTATION)
 
 ```ts
-async function runAgent(input) {
-  const bb = new BlackboardStore();
+function mutateSkill(skill, feedback) {
+  const newSkill = clone(skill);
 
-  bb.set({
-    goal: input,
-    status: "planning",
-    cycle: 0
-  });
+  if (feedback.includes("missing step")) {
+    newSkill.logic.push({
+      op: "transform",
+      ...
+    });
+  }
 
-  await schedulerLoop(bb);
+  if (feedback.includes("wrong operator")) {
+    step.operator = fixOperator(step.operator);
+  }
 
-  return bb.get().execution.result;
+  return newSkill;
+}
+```
+
+👉 mutation harus berbasis critic, bukan random
+
+---
+
+## ❌ 3.2 Tidak ada anti-regression system
+
+Saat ini:
+
+* skill baru langsung replace (kadang)
+
+👉 ini bahaya
+
+---
+
+## 🔧 FIX (A/B TEST)
+
+```ts
+async function compareSkills(oldSkill, newSkill, testCases) {
+  let oldScore = 0;
+  let newScore = 0;
+
+  for (const t of testCases) {
+    oldScore += evaluate(runDSL(oldSkill, t.input));
+    newScore += evaluate(runDSL(newSkill, t.input));
+  }
+
+  return newScore > oldScore;
 }
 ```
 
 ---
 
-# 🧪 4. CONTOH END-TO-END (WAJIB PAHAM)
+## ❌ 3.3 Planner belum terhubung ke real capability constraint
+
+Dari planner design: 
+
+👉 masih bisa hallucinate capability
+
+---
+
+## 🔧 FIX
+
+```ts
+if (!capabilityRegistry.includes(step.capability)) {
+  rejectPlan();
+}
+```
+
+---
+
+# 🔵 4. CONTOH END-TO-END (INPUT → OUTPUT)
 
 ## INPUT
 
 ```json
 {
-  "goal": "ambil data user dari API dan hitung jumlahnya"
+  "goal": "ambil user dari API lalu ambil nama"
 }
 ```
 
 ---
 
-## FLOW INTERNAL
+## FLOW (SETELAH FIX)
 
-### 1. planner
+### 1. Planner output
 
 ```json
 {
-  "subgoals": [
-    { "id": "g1", "goal": "fetch api" },
-    { "id": "g2", "goal": "count data" }
+  "plans": [
+    {
+      "id": "p1",
+      "steps": [
+        { "capability": "http.get", "input": {} },
+        { "capability": "json.parse", "input": {} },
+        { "capability": "object.get", "input": { "path": "name" } }
+      ]
+    }
   ]
 }
 ```
 
 ---
 
-### 2. micro planner
+### 2. Executor result
 
 ```json
 {
-  "plan": {
-    "steps": [
-      { "capability": "http.get" },
-      { "capability": "array.length" }
-    ]
+  "result": {
+    "name": "Leanne Graham"
   }
 }
 ```
 
 ---
 
-### 3. executor result
+### 3. Critic
 
 ```json
 {
-  "result": 10
+  "score": 0.88,
+  "issues": [],
+  "suggestions": []
 }
 ```
 
 ---
 
-### 4. critic
+### 4. Skill stats update
 
 ```json
 {
-  "score": 0.9,
-  "issues": []
+  "usage_count": 5,
+  "success_count": 5,
+  "score": 0.91
 }
 ```
 
 ---
 
-### 5. reinforcement update
+# ⚠️ 5. REALITY CHECK (INI PENTING)
 
-```json
-{
-  "skill_id": "array.length",
-  "new_score": 0.87
-}
-```
+Sekarang sistem kamu:
 
----
+✅ sudah:
 
-# ⚠️ 5. MASALAH PALING BERBAHAYA
+* modular
+* punya learning loop
+* punya evolution concept
 
-## ❌ SYSTEM KAMU BISA “HALU EVOLVE”
+❌ tapi belum:
 
-Kenapa?
-
-Karena:
-
-* evaluator lemah
-* test case minim
-* mutation random
-
-👉 hasilnya:
-**skill buruk tetap survive**
+* reliable
+* measurable
+* stable
 
 ---
 
-## ✅ FIX (WAJIB KERAS)
+# 🎯 PRIORITAS PERBAIKAN (URUTAN WAJIB)
 
-### Tambahkan golden test
+Jangan lompat.
 
-```ts
-const GOLDEN_TESTS = {
-  "array.length": [
-    { input: [1,2,3], expected: 3 }
-  ]
-};
-```
+## 1. Executor hardening
 
----
+* timeout
+* schema validation
+* deterministic MCP
 
-### evaluasi real
+## 2. Test + evaluator
 
-```ts
-function evaluateReal(result, expected) {
-  return JSON.stringify(result) === JSON.stringify(expected);
-}
-```
+* real test case
+* real correctness check
 
----
+## 3. Capability matching
 
-# 🧠 6. YANG SUDAH BAGUS (INI JARANG ORANG PUNYA)
+* embedding + ranking
 
-Ini bagian kamu sudah level tinggi:
+## 4. Anti-regression
 
-* ✔ evolutionary skill system 
-* ✔ bandit exploration 
-* ✔ hierarchical planner 
-* ✔ blackboard system 
-* ✔ code generation sandbox 
+* A/B testing
 
-👉 ini bukan beginner project
+## 5. Guided mutation
+
+* berbasis critic, bukan random
 
 ---
 
-# 🚀 7. PRIORITAS PERBAIKAN (URUTAN WAJIB)
+# 🔥 KESIMPULAN
 
-Jangan lompat-lompat.
+Sistem kamu sudah masuk kategori:
 
-## 1️⃣ unify executor (critical)
+👉 **proto self-improving agent**
 
-## 2️⃣ skill selection scoring (mandatory)
+Tapi masih:
 
-## 3️⃣ integrate scheduler → entrypoint
+👉 **unstable evolutionary sandbox**
 
-## 4️⃣ connect reinforcement → mutation trigger
+Kalau kamu lanjut tanpa fix ini:
 
-## 5️⃣ strong evaluator + test system
-
----
-
-# 🔥 8. PENILAIAN JUJUR
-
-Kalau sekarang dijalankan:
-
-👉 ini masih:
-**“framework AI yang terlihat pintar”**
-
-Belum:
-
-👉 **self-improving agent yang stabil**
+→ system akan “belajar salah dengan percaya diri”
 
 ---
 
-# 🎯 9. NEXT STEP PALING MASUK AKAL
+Kalau mau lanjut serius (dan ini langkah paling penting berikutnya):
 
-Kalau kamu serius:
+👉 bilang: **“audit executor DSL saya secara detail (line-by-line improvement)”**
 
-minta ini:
-
-👉 **“audit executor + DSL runtime secara detail”**
-
-Karena:
-
-> 90% kegagalan agent system = executor jelek
-
----
-
-Kalau kamu mau, saya bisa bongkar:
-
-* bug tersembunyi DSL kamu
-* edge case yang pasti crash
-* cara bikin deterministic execution beneran
-
-Itu bagian paling krusial, bukan planner.
+Itu bagian paling krusial. Tanpa executor yang benar, semua layer di atasnya tidak ada artinya.
