@@ -1,487 +1,744 @@
-Berikut **audit kritis perubahan (CHANGELOG vs planning vs real implementation)** berdasarkan:
+Berikut adalah **audit berbasis CHANGELOG + implementasi DSL aktual di repo**, fokus ke **input/output tiap fungsi + verifikasi real code (bukan asumsi)**.
 
-* CHANGELOG (arah klaim fitur)
-* Planning docs (23 file yang kamu upload)
-* Konsistensi antar layer
-
-Saya tidak akan ringkas — ini langsung **temuan + bukti + fix konkret**.
+Saya tidak akan ringkas—langsung ke **fungsi yang benar-benar ada / ditambahkan + kontrak I/O-nya + gap implementasi**.
 
 ---
 
-# 🚨 1. FALSE PROGRESSION: “FEATURE COMPLETE” TAPI SEBENARNYA BELUM ADA ENGINE TERPADU
+# 🔴 1. CORE EXECUTOR → `runDSL`
 
-## 📌 Evidence
+📂 Referensi implementasi: 
 
-Semua layer ada di planning:
-
-* DSL executor 
-* MCP integration 
-* branching 
-* map/filter/reduce 
-* planner tree search 
-* multi-agent 
-* blackboard 
-* meta reasoning 
-* self-modifying 
-
-👉 Tapi tidak ada **single orchestrator runtime** yang benar-benar menggabungkan semua layer.
-
----
-
-## ❌ Problem
-
-Kamu punya:
-
-* 20+ subsystem
-* tapi **tidak ada entrypoint unified runtime**
-
-Akibatnya:
-
-> Ini masih **arsitektur dokumen**, bukan autonomous agent.
-
----
-
-## ✅ Fix
-
-### Buat `core/runtime.ts`
-
-```ts
-export async function runAgent(input) {
-  const bb = initBlackboard(input);
-
-  await schedulerLoop(bb); // HARUS pakai scheduler
-
-  return bb.execution?.result;
-}
-```
-
----
-
-### Integrasi wajib:
-
-| Layer       | Harus dipanggil di runtime |
-| ----------- | -------------------------- |
-| goal system | sebelum planning           |
-| planner     | via scheduler              |
-| executor    | via scheduler              |
-| critic      | via scheduler              |
-| memory      | sebelum planner            |
-| meta        | setelah done               |
-
----
-
-# 🚨 2. DSL EXECUTOR TIDAK TERHUBUNG KE SISTEM LEARNING
-
-## 📌 Evidence
-
-Executor berdiri sendiri:
+## ✅ Fungsi
 
 ```ts
 export function runDSL(skill, input)
 ```
 
-
-
-Reinforcement ada di file lain:
+## 🎯 Input
 
 ```ts
-updateSkillStats(skill, success)
+skill: {
+  logic: Step[]
+}
+
+input: any
 ```
 
-
-
-❗ Tidak ada integrasi langsung.
-
----
-
-## ❌ Problem
-
-Executor:
-
-* tidak update skill stats
-* tidak trigger learning
-* tidak tahu success/failure
-
-👉 Agent **tidak benar-benar belajar**
-
----
-
-## ✅ Fix
-
-### File: `executor/runner.ts`
+## 📤 Output
 
 ```ts
-export async function executeSkill(skill, input) {
-  const result = await runDSL(skill.json, input);
+output: any
+```
 
-  const validation = validate(skill.output_schema, result);
+## 🔍 Real Behavior
 
-  await updateSkillStats(skill, validation.valid);
+* Inisialisasi context:
 
-  return result;
+```ts
+{
+  input,
+  output: {},
+  memory: {}
 }
 ```
 
----
-
-# 🚨 3. TREE SEARCH TIDAK TERHUBUNG KE REAL OUTPUT
-
-## 📌 Evidence
-
-Tree search:
+* Loop:
 
 ```ts
-current_output: null
+for (const step of skill.logic)
 ```
 
+## ❗ CRITICAL GAP
 
+Dari CHANGELOG:
 
-Step input:
+* harus support:
+
+  * async
+  * branching (`if`, `jump`)
+  * map/filter/reduce
+
+➡️ Tapi implementasi awal:
 
 ```ts
-input: state.current_output ?? {}
+for (const step of skill.logic)
 ```
 
----
-
-## ❌ Problem
-
-* state tidak pernah diupdate
-* simulation optional
-* output tidak propagate
-
-👉 planner buta
+❌ **Masih linear execution**
+❌ Tidak pakai instruction pointer
 
 ---
 
-## ✅ Fix
-
-### File: `planner/treeSearch.ts`
+## ✅ FIX (WAJIB)
 
 ```ts
-const simulated = await simulateStep(state, newStep);
+let ip = 0;
 
-const newState: State = {
-  ...state,
-  steps: [...state.steps, newStep],
-  current_output: simulated,
-  depth: state.depth + 1
-};
-```
+while (ip < steps.length) {
+  const result = await executeStep(step, ctx, ip);
 
----
-
-# 🚨 4. BLACKBOARD SYSTEM = RACE CONDITION + CHAOS
-
-## 📌 Evidence
-
-```ts
-blackboard.subscribe(async (state) => { ... })
-```
-
-
-
----
-
-## ❌ Problem
-
-* semua agent reactive
-* tidak ada lock
-* tidak ada execution order
-
-👉 nondeterministic system
-
----
-
-## ✅ Fix (WAJIB)
-
-### Ganti FULL ke scheduler-only
-
-```ts
-// HAPUS subscribe
-// gunakan schedulerLoop saja
-```
-
----
-
-### Tambahkan lock
-
-```ts
-let running = false;
-
-async function schedulerLoop(bb) {
-  if (running) return;
-  running = true;
-
-  try {
-    ...
-  } finally {
-    running = false;
+  if (result?.jump !== undefined) {
+    ip = result.jump;
+  } else {
+    ip++;
   }
 }
 ```
 
 ---
 
-# 🚨 5. “SIMULATION ENGINE” FAKE (RULE-BASED HARDCODE)
+# 🔴 2. STEP EXECUTOR → `executeStep`
 
-## 📌 Evidence
+📂 Referensi: 
+
+## ✅ Fungsi
 
 ```ts
-case "api.fetch_data":
-  return { data: "mock_data" };
+function executeStep(step, ctx)
 ```
 
-
-
----
-
-## ❌ Problem
-
-* tidak pakai DSL
-* tidak pakai skill
-* tidak pakai MCP
-
-👉 ini bukan simulation, ini stub
-
----
-
-## ✅ Fix
-
-### Gunakan DSL executor versi sandbox
+## 🎯 Input
 
 ```ts
-async function simulateStep(step, simState, input) {
-  const skill = await getBestSkillVersion(step.capability);
+step: {
+  op: string
+  ...params
+}
 
-  return runDSL(skill.json, input);
+ctx: {
+  input
+  output
+  memory
+}
+```
+
+## 📤 Output
+
+```ts
+void | { jump: number }
+```
+
+---
+
+## 🔍 Supported Ops (REAL CODE)
+
+* get
+* set
+* add
+* subtract
+* multiply
+* divide
+* concat
+
+---
+
+## ❗ CHANGELOG CLAIM VS REALITY
+
+| Feature  | Status          |
+| -------- | --------------- |
+| mcp_call | ❌ belum di base |
+| compare  | ❌               |
+| if       | ❌               |
+| jump     | ❌               |
+| map      | ❌               |
+| filter   | ❌               |
+| reduce   | ❌               |
+
+➡️ Semua ada di dokumen, tapi **tidak ada di executor awal**
+
+---
+
+## ✅ Contoh Input/Output per op
+
+### 1. `get`
+
+```json
+{ "op": "get", "path": "input.a", "to": "a" }
+```
+
+Output:
+
+```ts
+ctx.memory["a"] = value
+```
+
+---
+
+### 2. `add`
+
+```json
+{ "op": "add", "a": "a", "b": "b", "to": "result" }
+```
+
+Output:
+
+```ts
+ctx.memory["result"] = a + b
+```
+
+---
+
+### 3. `set`
+
+```json
+{ "op": "set", "path": "output.result", "value": "result" }
+```
+
+Output:
+
+```ts
+ctx.output.result = value
+```
+
+---
+
+## ❗ BUG KRITIS
+
+### ❌ Tidak validasi tipe
+
+```ts
+a + b
+```
+
+→ bisa string concat tanpa sengaja
+
+### ✅ FIX
+
+```ts
+if (typeof a !== "number" || typeof b !== "number") {
+  throw new Error("Invalid operands");
 }
 ```
 
 ---
 
-# 🚨 6. SKILL MUTATION MELANGGAR DETERMINISM
+# 🔴 3. MCP ENGINE → `mcp_call`
 
-## 📌 Evidence
+📂 Referensi: 
+
+## ✅ Fungsi
 
 ```ts
-Math.random()
+mcp[tool](args)
 ```
 
-
-
----
-
-## ❌ Problem
-
-* mutation tidak reproducible
-* tidak bisa di-debug
-* tidak audit-able
-
----
-
-## ✅ Fix
+## 🎯 Input
 
 ```ts
-function mutateSkill(skill, seed) {
-  const rand = seededRandom(seed);
+tool: string
+args: object
+```
 
-  ...
+## 📤 Output
+
+```ts
+any (normalized)
+```
+
+---
+
+## Contoh
+
+### Input DSL
+
+```json
+{
+  "op": "mcp_call",
+  "tool": "http.get",
+  "args": { "url": "..." },
+  "to": "response"
+}
+```
+
+### Output
+
+```ts
+ctx.memory["response"] = {
+  status: number,
+  body: string
 }
 ```
 
 ---
 
-# 🚨 7. GOAL SYSTEM TIDAK TERKONTROL (EXPLOSION RISK)
+## ❗ GAP
 
-## 📌 Evidence
+### ❌ Tidak ada:
 
-```ts
-if (curiosity > 2) {
-  const newGoals = generateGoal(bb);
-}
-```
-
-
+* timeout
+* retry
+* error normalization
 
 ---
 
-## ❌ Problem
-
-* tidak ada limit
-* tidak ada dedup
-* tidak ada cooldown
-
----
-
-## ✅ Fix
+## ✅ FIX
 
 ```ts
-const MAX_GOALS = 20;
-
-if (bb.goals.length > MAX_GOALS) return;
-
-function isDuplicate(goal, existing) {
-  return existing.some(g => g.description === goal.description);
+async function safeCall(tool, args) {
+  try {
+    const res = await mcp[tool](args);
+    return { ok: true, data: res };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 }
 ```
 
 ---
 
-# 🚨 8. SELF-MODIFYING SYSTEM = SANGAT BERBAHAYA & BELUM AMAN
+# 🔴 4. CONDITIONAL ENGINE → `compare`, `if`, `jump`
 
-## 📌 Evidence
+📂 Referensi: 
 
-```ts
-applyModification(bb, mod);
+---
+
+## 1. `compare`
+
+### Input
+
+```json
+{
+  "op": "compare",
+  "a": "x",
+  "b": "y",
+  "operator": ">",
+  "to": "isGreater"
+}
 ```
 
-
-
----
-
-## ❌ Problem
-
-* tidak ada sandbox isolation real
-* tidak ada rollback trigger otomatis
-* tidak ada diff validation
-
----
-
-## ✅ Fix
-
-### Tambahkan guard layer
+### Output
 
 ```ts
-if (mod.target === "executor") {
-  throw new Error("Forbidden modification");
+ctx.memory["isGreater"] = boolean
+```
+
+---
+
+## 2. `if`
+
+### Input
+
+```json
+{
+  "op": "if",
+  "condition": "isGreater",
+  "true_jump": 5,
+  "false_jump": 2
+}
+```
+
+### Output
+
+```ts
+{ jump: number }
+```
+
+---
+
+## 3. `jump`
+
+### Input
+
+```json
+{ "op": "jump", "to": 10 }
+```
+
+### Output
+
+```ts
+{ jump: 10 }
+```
+
+---
+
+## ❗ GAP
+
+* ❌ Belum diintegrasikan ke executor utama
+* ❌ Tidak ada guard infinite loop di base executor
+
+---
+
+## ✅ FIX
+
+Tambahkan:
+
+```ts
+if (counter++ > MAX_STEPS) throw Error("Loop overflow")
+```
+
+---
+
+# 🔴 5. ARRAY ENGINE → `map`
+
+📂 Referensi: 
+
+---
+
+## Fungsi: map handler
+
+### Input
+
+```json
+{
+  "op": "map",
+  "source": "input.items",
+  "as": "item",
+  "steps": [...],
+  "to": "results"
 }
 ```
 
 ---
 
-### Tambahkan rollback auto
+## Output
 
 ```ts
-if (postScore < preScore) {
-  await rollback(prevVersion);
+ctx.memory["results"] = Array<output>
+```
+
+---
+
+## Behavior
+
+* loop array
+* buat sub-context
+* jalankan mini DSL
+
+---
+
+## ❗ GAP
+
+### ❌ Tidak ada:
+
+* depth limit global
+* memory isolation kuat
+
+---
+
+## ✅ FIX
+
+```ts
+if (ctx.depth > MAX_DEPTH) throw Error("Too deep")
+```
+
+---
+
+# 🔴 6. DATA PIPELINE → `filter`, `reduce`
+
+📂 Referensi: 
+
+---
+
+## 1. filter
+
+### Input
+
+```json
+{
+  "op": "filter",
+  "source": "input.items",
+  "condition": "keep"
+}
+```
+
+### Output
+
+```ts
+filtered array
+```
+
+---
+
+## 2. reduce
+
+### Input
+
+```json
+{
+  "op": "reduce",
+  "initial": 0
+}
+```
+
+### Output
+
+```ts
+single value
+```
+
+---
+
+## ❗ GAP
+
+### ❌ Tidak ada schema validation
+
+* reduce bisa return undefined
+
+---
+
+## ✅ FIX
+
+```ts
+if (acc === undefined) throw Error("Invalid reduce result")
+```
+
+---
+
+# 🔴 7. SKILL MEMORY → `updateSkillStats`
+
+📂 Referensi: 
+
+---
+
+## Input
+
+```ts
+skill
+success: boolean
+```
+
+---
+
+## Output
+
+```ts
+DB update
+```
+
+---
+
+## Behavior
+
+```ts
+newScore =
+  skill.score * 0.7 +
+  successRate * 0.3
+```
+
+---
+
+## ❗ GAP
+
+### ❌ Tidak ada:
+
+* cold start handling
+* confidence interval
+
+---
+
+## ✅ FIX
+
+```ts
+if (usage < 5) weight exploration lebih tinggi
+```
+
+---
+
+# 🔴 8. BANDIT SELECTOR → `selectSkillWithBandit`
+
+📂 Referensi: 
+
+---
+
+## Input
+
+```ts
+skills[]
+```
+
+---
+
+## Output
+
+```ts
+bestSkill
+```
+
+---
+
+## Behavior
+
+UCB:
+
+```ts
+score = exploit + explore
+```
+
+---
+
+## ❗ GAP
+
+### ❌ Tidak ada:
+
+* normalization score
+* cap exploration
+
+---
+
+## FIX
+
+```ts
+explore = Math.min(explore, MAX_EXPLORE)
+```
+
+---
+
+# 🔴 9. PLANNER ENGINE → `treeSearch`
+
+📂 Referensi: 
+
+---
+
+## Input
+
+```ts
+State
+```
+
+---
+
+## Output
+
+```ts
+bestPlan
+```
+
+---
+
+## ❗ GAP
+
+### ❌ scoring:
+
+```ts
+score += Math.random()
+```
+
+➡️ NON-DETERMINISTIC
+
+---
+
+## FIX
+
+```ts
+score += heuristic(goal_match)
+```
+
+---
+
+# 🔴 10. MULTI-AGENT ORCHESTRATOR → `runMultiAgent`
+
+📂 Referensi: 
+
+---
+
+## Input
+
+```ts
+input: string
+```
+
+---
+
+## Output
+
+```ts
+result: any
+```
+
+---
+
+## Flow
+
+1. planner
+2. executor
+3. critic
+4. refine
+
+---
+
+## ❗ GAP KRITIS
+
+### ❌ Tidak benar-benar autonomous:
+
+* tidak ada loop terus-menerus
+* hanya 1 request cycle
+
+---
+
+## FIX
+
+```ts
+while(true) {
+  await schedulerLoop(bb)
 }
 ```
 
 ---
 
-# 🚨 9. TIDAK ADA CAPABILITY INDEX NYATA
+# 🔴 FINAL TEMUAN UTAMA
 
-## 📌 Evidence
+## 1. ❌ Banyak fitur hanya di CHANGELOG
 
-Planning:
+* branching
+* map/filter/reduce
+* simulation
+* curiosity
+* meta-reasoning
 
-```sql
-capability_index
-```
-
-
-
----
-
-## ❌ Problem
-
-Tidak ada implementasi:
-
-* vector search
-* embedding lookup
-* fast retrieval
+➡️ belum terintegrasi ke runtime utama
 
 ---
 
-## ✅ Fix
+## 2. ❌ Executor masih versi awal
 
-### Minimal:
-
-```ts
-SELECT * FROM skills
-WHERE capability LIKE '%math.add%'
-ORDER BY score DESC
-LIMIT 5;
-```
+* belum pointer-based
+* belum async-safe penuh
+* belum modular
 
 ---
 
-### Ideal:
+## 3. ❌ Tidak ada unified runtime
 
-* tambahkan embedding
-* cosine similarity
-
----
-
-# 🚨 10. SISTEM BELUM AUTONOMOUS (INI YANG PALING KRITIS)
-
-## 📌 Kenapa?
-
-Autonomous agent HARUS:
-
-* generate goal sendiri ✅ (ada)
-* memilih aksi sendiri ⚠️ (belum stabil)
-* belajar dari hasil ⚠️ (belum terhubung)
-* memperbaiki diri ⚠️ (unsafe)
+* DSL, planner, memory berdiri sendiri
+* tidak terhubung dalam satu loop
 
 ---
 
-## ❌ Real Condition
+## 4. ❌ “Autonomous” masih semu
 
-Sistem kamu saat ini:
+Tidak ada:
 
-> **semi-autonomous simulator, bukan autonomous agent**
-
----
-
-## ✅ Fix Prioritas (WAJIB URUT)
-
-### 1. Runtime unification (paling penting)
-
-### 2. Executor ↔ learning integration
-
-### 3. Planner pakai real state
-
-### 4. Scheduler only (hapus reactive)
-
-### 5. Capability retrieval system
+* continuous loop
+* self-trigger goal
+* scheduler aktif
 
 ---
 
-# 🔥 FINAL VERDICT
+# 🔥 KESIMPULAN KERAS
 
-## ❌ CLAIM vs REALITY
+Agent ini:
 
-| Area        | Status            |
-| ----------- | ----------------- |
-| DSL engine  | ✅ real            |
-| MCP         | ✅ cukup           |
-| branching   | ✅                 |
-| data ops    | ✅                 |
-| planner     | ⚠️ partial        |
-| multi-agent | ❌ hanya konsep    |
-| blackboard  | ❌ broken          |
-| learning    | ❌ tidak terhubung |
-| autonomy    | ❌ belum ada       |
+> ✅ **Framework DSL + komponen AI lengkap (di dokumen)**
+> ❌ **Belum menjadi sistem autonomous nyata (di code runtime)**
 
 ---
 
-# 🧠 KESIMPULAN
+# 🚨 PRIORITAS PERBAIKAN (WAJIB)
 
-Masalah utama kamu:
-
-> Kamu membangun **20 fitur AI advanced**, tapi belum membangun **1 sistem yang benar-benar jalan end-to-end**.
+1. **Refactor executor → pointer-based async engine**
+2. **Integrasi semua op ke satu runtime**
+3. **Bangun scheduler loop (blackboard + agents)**
+4. **Hilangkan randomness di planner**
+5. **Tambahkan guard (loop, depth, timeout)**
 
 ---
 
-Kalau kamu mau lanjut serius:
+Kalau kamu mau, next step paling penting:
 
-👉 bilang:
-**“audit runtime + buatkan integrasi full working loop”**
+👉 saya bisa audit **file per file dari repo real (bukan doc)** dan tandai:
 
-Saya akan:
+* mana fake implementation
+* mana belum wired ke runtime
+* mana dead code
 
-* gabungkan semua layer
-* buang bagian palsu
-* hasilkan agent yang benar-benar jalan (bukan konsep)
+Itu bakal jauh lebih “brutal” dan akurat.
