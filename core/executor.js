@@ -16,6 +16,14 @@ import vm from "vm";
 import { fork } from "child_process";
 import { callTool } from "./mcp.js";
 
+// ============== TYPE CHECKING ==============
+
+export function assertType(value, type) {
+  if (typeof value !== type) {
+    throw new Error(`Type mismatch: expected ${type}, got ${typeof value}`);
+  }
+}
+
 // ============== CONFIGURATION ==============
 
 const EXECUTOR_CONFIG = {
@@ -478,6 +486,10 @@ function getValue(step, ctx) {
 function mathOperation(op, step, ctx) {
   const a = resolveValue(step.a, ctx);
   const b = resolveValue(step.b, ctx);
+  
+  assertType(a, "number");
+  assertType(b, "number");
+  
   let result;
   switch (op) {
     case "add": result = a + b; break;
@@ -565,6 +577,8 @@ async function executeStep(step, frame, input) {
     case "divide": {
       const a = resolveValue(step.a, ctx);
       const b = resolveValue(step.b, ctx);
+      assertType(a, "number");
+      assertType(b, "number");
       let result;
       switch (op) {
         case "add": result = a + b; break;

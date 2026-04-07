@@ -14,6 +14,55 @@ import { getTestCases } from "./groundTruth.js";
 
 const TOLERANCE = 1e-9;
 
+export const SystemStats = {
+  success_rate: 0,
+  avg_score: 0,
+  total_runs: 0
+};
+
+export function updateSystemStats(success, score) {
+  SystemStats.total_runs++;
+
+  SystemStats.success_rate =
+    (SystemStats.success_rate * (SystemStats.total_runs - 1) + (success ? 1 : 0)) /
+    SystemStats.total_runs;
+
+  SystemStats.avg_score =
+    (SystemStats.avg_score * (SystemStats.total_runs - 1) + score) /
+    SystemStats.total_runs;
+}
+
+export async function evaluateWithBenchmark(skill) {
+  const capability = skill.capability;
+  const tests = getTestCases(capability);
+
+  if (!tests || tests.length === 0) {
+    return { score: 0, pass: 0, total: 0, reason: "no_benchmark_tests" };
+  }
+
+  let pass = 0;
+
+  for (const t of tests) {
+    try {
+      const result = await runDSL(skill, t.input);
+      if (deepEqual(result, t.expected)) {
+        pass++;
+      }
+    } catch (e) {
+      if (t.expected === null) {
+        pass++;
+      }
+    }
+  }
+
+  return pass / tests.length;
+}
+
+async function runDSL(skill, input) {
+  const { runSkill } = await import("./executor.js");
+  return runSkill(skill, input);
+}
+
 /**
  * Evaluation thresholds
  * - score < ACCEPT_THRESHOLD: reject (skill not good enough)

@@ -11,6 +11,63 @@
 
 import { createVersion } from "./versioning.js";
 
+// ============== CIRCUIT BREAKER ==============
+
+const CircuitBreakerConfig = {
+  failureThreshold: 5,
+  resetTimeout: 60000
+};
+
+const circuitBreakerState = new Map();
+
+export function checkCircuitBreaker(skill) {
+  const key = skill.id || skill.capability;
+  const state = circuitBreakerState.get(key);
+  
+  if (!state) return { closed: true };
+  
+  if (state.failure_count > CircuitBreakerConfig.failureThreshold) {
+    if (Date.now() - state.last_failure < CircuitBreakerConfig.resetTimeout) {
+      return { closed: false, reason: "circuit_open", failure_count: state.failure_count };
+    }
+    state.failure_count = 0;
+  }
+  
+  return { closed: true };
+}
+
+export function recordSkillFailure(skill) {
+  const key = skill.id || skill.capability;
+  let state = circuitBreakerState.get(key);
+  
+  if (!state) {
+    state = { failure_count: 0, last_failure: 0 };
+    circuitBreakerState.set(key, state);
+  }
+  
+  state.failure_count++;
+  state.last_failure = Date.now();
+}
+
+export function recordSkillSuccess(skill) {
+  const key = skill.id || skill.capability;
+  const state = circuitBreakerState.get(key);
+  
+  if (state) {
+    state.failure_count = 0;
+  }
+}
+
+export function getDisabledSkills() {
+  const disabled = [];
+  for (const [key, state] of circuitBreakerState) {
+    if (state.failure_count > CircuitBreakerConfig.failureThreshold) {
+      disabled.push(key);
+    }
+  }
+  return disabled;
+}
+
 // ============== CONFIGURATION ==============
 
 export const SKILL_MANAGEMENT_CONFIG = {
@@ -63,6 +120,11 @@ export function extractCapabilityFromGoal(goalText) {
   }
   
   return "general.unknown";
+}
+
+export function filterEnabledSkills(skills) {
+  const disabled = getDisabledSkills();
+  return skills.filter(s => !disabled.includes(s.id || s.capability));
 }
 
 // ============== DUPLICATE DETECTION ==============

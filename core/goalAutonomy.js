@@ -1,3 +1,13 @@
+export function isRelevantGoal(goal, currentContext = "") {
+  if (!goal || !currentContext) return true;
+  
+  const goalStr = typeof goal === "string" ? goal : goal.goal || goal.description || "";
+  const contextStr = typeof currentContext === "string" ? currentContext : JSON.stringify(currentContext);
+  
+  const validator = new GoalValidator();
+  return validator.stringSimilarity(goalStr, contextStr) > 0.5;
+}
+
 export class GoalValidator {
   constructor(options = {}) {
     this.minRelevance = options.minRelevance || 0.6;

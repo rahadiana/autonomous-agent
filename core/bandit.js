@@ -1,3 +1,31 @@
+export function computeFinalScore(skill, similarity = 0, contextMatch = 0) {
+  return (
+    similarity * 0.5 +
+    (skill.score || 0) * 0.3 +
+    contextMatch * 0.2
+  );
+}
+
+export function selectSkillWithContext(skills, context = {}) {
+  const total = skills.reduce((a, b) => a + (b.usage_count || 0), 0);
+  const similarity = context.similarity || 0;
+  const contextMatch = context.contextMatch || 0;
+
+  let best = null;
+  let bestScore = -Infinity;
+
+  for (const s of skills) {
+    const score = computeFinalScore(s, similarity, contextMatch);
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = s;
+    }
+  }
+
+  return best;
+}
+
 export function banditScore(skill, total) {
   const c = 1.2;
 

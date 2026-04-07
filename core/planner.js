@@ -50,6 +50,22 @@ export class Planner {
     return 0;
   }
 
+  computePlanCost(plan) {
+    if (!plan || !plan.bestPath) return 0;
+    let cost = 0;
+
+    for (const step of plan.bestPath) {
+      const capability = step.capability || "";
+      if (capability.startsWith("api.") || capability.startsWith("http.")) {
+        cost += 3;
+      } else {
+        cost += 1;
+      }
+    }
+
+    return cost;
+  }
+
   estimateCost(plan) {
     if (!plan || !plan.bestPath) return 0;
     return plan.bestPath.length * 0.1;
@@ -133,11 +149,17 @@ export class Planner {
 
   createResult(root, status, path = null) {
     const bestNode = this.findBestNode(root);
+    const cost = this.computePlanCost({ bestPath: bestNode ? bestNode.getPath() : [] });
+    const costPenalty = cost * 0.05;
+    const adjustedScore = (bestNode ? bestNode.score : 0) - costPenalty;
+    
     return {
       status,
       path,
       bestPath: bestNode ? bestNode.getPath() : [],
-      bestScore: bestNode ? bestNode.score : 0,
+      bestScore: adjustedScore,
+      rawScore: bestNode ? bestNode.score : 0,
+      cost,
       nodesExplored: this.countNodes(root)
     };
   }
