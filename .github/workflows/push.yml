@@ -25,6 +25,7 @@ jobs:
       - name: Install opencode
         run: |
           bun install -g opencode-ai
+          npm i
           sleep 5
 
       - name: Verify opencode
