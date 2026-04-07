@@ -414,6 +414,159 @@ export class UnifiedEvaluator {
 export default unifiedEvaluate;
 
 /**
+ * Structural Evaluation Function
+ * Based on next_plan.md FIX 3 - Evaluates based on structure, not just output
+ * 
+ * @param {Object} result - The result from skill execution
+ * @param {Object} schema - Expected output schema
+ * @param {Object} expectedShape - Expected shape of output
+ * @returns {Object} - { score, breakdown }
+ */
+export function structuralEvaluate(result, schema, expectedShape) {
+  let score = 0;
+  const breakdown = {
+    validation: 0,
+    shape: 0,
+    completeness: 0,
+    stability: 0
+  };
+
+  if (!result) {
+    return { score: 0, breakdown };
+  }
+
+  if (schema) {
+    const validation = validateSchemaWithSchema(schema, result);
+    if (validation.valid) {
+      breakdown.validation = 0.3;
+      score += 0.3;
+    }
+  }
+
+  if (expectedShape) {
+    if (typeof result === typeof expectedShape) {
+      breakdown.shape = 0.2;
+      score += 0.2;
+    }
+
+    const keys = Object.keys(expectedShape || {});
+    if (keys.length > 0) {
+      const match = keys.filter(k => result[k] !== undefined).length;
+      const completenessScore = (match / keys.length) * 0.3;
+      breakdown.completeness = completenessScore;
+      score += completenessScore;
+    }
+  }
+
+  breakdown.stability = 0.2;
+  score += 0.2;
+
+  return { score, breakdown };
+}
+
+/**
+ * Validate result against a schema
+ */
+function validateSchemaWithSchema(schema, result) {
+  const errors = [];
+  
+  if (!schema) {
+    return { valid: true, errors: [] };
+  }
+
+  if (schema.required) {
+    for (const field of schema.required) {
+      if (result[field] === undefined) {
+        errors.push(`Missing required field: ${field}`);
+      }
+    }
+  }
+
+  if (schema.properties) {
+    for (const [field, type] of Object.entries(schema.properties)) {
+      if (result[field] !== undefined && typeof result[field] !== type) {
+        errors.push(`Field ${field} expected type ${type}, got ${typeof result[field]}`);
+      }
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors
+  };
+}
+
+/**
+ * External Objective Function
+ * Based on next_plan.md FIX 9 - Real success metric, not proxy
+ * 
+ * @param {Object} result - Skill execution result
+ * @param {string|Object} userGoal - The user's goal
+ * @returns {Object} - { score, alignment }
+ */
+export function computeGoalAlignment(result, userGoal) {
+  if (!userGoal) {
+    return { score: 0.5, alignment: "no_goal" };
+  }
+
+  let goalText = "";
+  if (typeof userGoal === "string") {
+    goalText = userGoal.toLowerCase();
+  } else if (typeof userGoal === "object" && userGoal.goal) {
+    goalText = String(userGoal.goal).toLowerCase();
+  }
+
+  if (!goalText) {
+    return { score: 0.5, alignment: "unknown" };
+  }
+
+  let score = 0.5;
+
+  if (goalText.includes("add") || goalText.includes("sum") || goalText.includes("plus")) {
+    const actual = result?.result ?? result?.value ?? result;
+    if (typeof actual === "number" && !isNaN(actual)) {
+      score = 1;
+    }
+  } else if (goalText.includes("multiply") || goalText.includes("product") || goalText.includes("times")) {
+    const actual = result?.result ?? result?.value ?? result;
+    if (typeof actual === "number" && !isNaN(actual)) {
+      score = 1;
+    }
+  } else if (goalText.includes("subtract") || goalText.includes("minus")) {
+    const actual = result?.result ?? result?.value ?? result;
+    if (typeof actual === "number" && !isNaN(actual)) {
+      score = 1;
+    }
+  } else if (goalText.includes("divide")) {
+    const actual = result?.result ?? result?.value ?? result;
+    if (typeof actual === "number" && !isNaN(actual)) {
+      score = 1;
+    }
+  } else if (goalText.includes("get") || goalText.includes("retrieve") || goalText.includes("fetch")) {
+    if (result && typeof result === "object" && Object.keys(result).length > 0) {
+      score = 1;
+    }
+  }
+
+  return { score, alignment: "computed" };
+}
+
+/**
+ * Combined Score with External Objective
+ * Based on next_plan.md FIX 9 - Combines internal and external scores
+ * 
+ * @param {number} internalScore - Score from internal evaluator
+ * @param {number} externalScore - Score from goal alignment
+ * @returns {number} - Combined final score
+ */
+export function computeFinalScoreWithObjective(internalScore, externalScore) {
+  const internalWeight = 0.5;
+  const externalWeight = 0.5;
+
+  return internalScore * internalWeight + externalScore * externalWeight;
+}
+
+/**
  * Compute Reward Function
  * Simple scoring based on next_plan.md line 153-181
  * 

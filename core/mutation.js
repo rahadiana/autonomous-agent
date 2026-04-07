@@ -202,6 +202,82 @@ export function mutateSkill(skill) {
 }
 
 /**
+ * Guided mutation - uses critic feedback to determine mutation direction
+ * Instead of random mutations, this uses feedback signals to target specific improvements
+ * 
+ * @param {Object} skill - Original skill to mutate
+ * @param {string} feedback - Feedback from critic (e.g., "missing step", "wrong operator")
+ * @returns {Object} Mutated skill clone
+ */
+export function mutateSkillWithFeedback(skill, feedback = "") {
+  const newSkill = structuredClone(skill);
+
+  if (!newSkill.logic || newSkill.logic.length === 0) return newSkill;
+
+  const feedbackLower = feedback.toLowerCase();
+
+  if (feedbackLower.includes("missing step")) {
+    newSkill.logic.push({
+      op: "validate",
+      path: "output"
+    });
+  }
+
+  if (feedbackLower.includes("wrong operator") || feedbackLower.includes("incorrect operation")) {
+    for (const step of newSkill.logic) {
+      if (step.op === "add") {
+        step.op = "multiply";
+      } else if (step.op === "subtract") {
+        step.op = "add";
+      } else if (step.op === "multiply") {
+        step.op = "add";
+      }
+    }
+  }
+
+  if (feedbackLower.includes("wrong order") || feedbackLower.includes("incorrect order")) {
+    if (newSkill.logic.length > 1) {
+      const first = newSkill.logic.shift();
+      newSkill.logic.push(first);
+    }
+  }
+
+  if (feedbackLower.includes("missing validation")) {
+    const validateIndex = newSkill.logic.findIndex(s => s.op === "validate");
+    if (validateIndex === -1) {
+      newSkill.logic.push({
+        op: "set",
+        path: "_validated",
+        value: true
+      });
+    }
+  }
+
+  if (feedbackLower.includes("error handling") || feedbackLower.includes("handle error")) {
+    for (const step of newSkill.logic) {
+      if (step.op === "divide") {
+        if (!step.check) {
+          step.check = "b !== 0";
+        }
+      }
+    }
+  }
+
+  if (feedbackLower.includes("wrong path") || feedbackLower.includes("incorrect path")) {
+    for (const step of newSkill.logic) {
+      if (step.to) {
+        step.to = step.to.replace(/\./g, "_");
+      }
+      if (step.path) {
+        step.path = step.path.replace(/\./g, "_");
+      }
+    }
+  }
+
+  return newSkill;
+}
+
+/**
  * Get mutation config (for testing/debugging)
  */
 export function getMutationConfig() {

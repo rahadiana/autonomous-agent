@@ -73,6 +73,63 @@ export class Blackboard {
       lockedBy: null,
       lockedAt: null
     });
+
+    this.zones.set("control", {
+      type: "control",
+      data: {
+        iteration: 0,
+        last_improvement: 0,
+        stagnation_count: 0,
+        best_score: 0,
+        status: "running"
+      },
+      version: 0,
+      locked: false,
+      lockedBy: null,
+      lockedAt: null
+    });
+  }
+
+  updateControlState(newScore) {
+    const control = this.zones.get("control");
+    if (!control) return null;
+    
+    control.data.iteration++;
+    
+    if (newScore > control.data.best_score) {
+      control.data.best_score = newScore;
+      control.data.last_improvement = control.data.iteration;
+      control.data.stagnation_count = 0;
+    } else {
+      control.data.stagnation_count++;
+    }
+    
+    if (control.data.stagnation_count > 3) {
+      control.data.status = "done";
+    }
+    
+    control.version++;
+    
+    return control.data;
+  }
+
+  getControlState() {
+    const control = this.zones.get("control");
+    return control ? control.data : null;
+  }
+
+  resetControlState() {
+    const control = this.zones.get("control");
+    if (control) {
+      control.data = {
+        iteration: 0,
+        last_improvement: 0,
+        stagnation_count: 0,
+        best_score: 0,
+        status: "running"
+      };
+      control.version++;
+    }
   }
 
   async acquireLock(zoneName, owner, timeout) {
