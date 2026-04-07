@@ -1,86 +1,115 @@
-Berikut **audit berbasis CHANGELOG + planning docs + implementasi DSL**.
-Saya fokus ke: **fungsi baru, input/output, dan apakah benar diimplementasikan atau hanya konsep.**
+Berikut **audit berbasis CHANGELOG + implementasi nyata DSL & sistem**.
+Saya fokus ke: **input/output tiap fungsi + bukti dari code + gap + fix konkret (dengan path file)**.
 
 ---
 
-# 🔴 TEMUAN KRITIS GLOBAL
+# 🚨 TEMUAN KRITIS GLOBAL
 
-### ❌ 1. Banyak fitur hanya ada di markdown (BELUM ADA DI CODE)
+## ❌ 1. Banyak fitur = hanya desain, BELUM TERINTEGRASI
 
-Semua file yang kamu kirim adalah **design doc**, bukan implementasi nyata.
+Semua modul advanced (planner, meta, world model, dll) hanya berupa **dokumen/blueprint**, bukan runtime yang benar-benar terhubung.
 
 Contoh:
 
-* DSL executor → ada pseudo-code TS, tapi repo target Node (JS)
-* Planner / Critic → hanya prompt
-* Blackboard → hanya contoh class
-* Simulation / world model → tidak ada integrasi nyata.
+* `hierarchicalPlan`
+* `runMultiAgent`
+* `schedulerLoop`
+* `metaReasoner`
 
-👉 Ini berarti:
+👉 Tidak ada orchestrator tunggal yang menyatukan semuanya.
 
-> sistem kamu masih **spec-driven**, belum **runtime-driven**
+📌 Bukti: semua hanya snippet markdown, bukan file `.js` yang dieksekusi 
 
 ---
 
-# 🔧 DSL CORE — EXECUTOR
+## ❌ 2. Executor DSL = core ada, tapi:
 
-Referensi: 
+* belum modular
+* belum ada registry op
+* belum ada validation kuat
+* belum ada type safety
 
-## Fungsi: `runDSL`
+---
 
-### Input
+## ❌ 3. Sistem belum benar-benar autonomous
 
-```js
-runDSL(skill, input)
+Karena:
+
+* goal generation tidak pernah dipanggil ke pipeline utama
+* memory tidak mempengaruhi planner secara nyata
+* meta-reasoning tidak mengubah behavior runtime
+
+---
+
+# ✅ ANALISIS PER FUNGSI (INPUT / OUTPUT + REAL IMPLEMENTATION)
+
+---
+
+# 1. `runDSL`
+
+📂 **Path (seharusnya)**
+`/executor/runDSL.js`
+
+📌 Code referensi: 
+
+## Input
+
+```ts
+(skill: {
+  logic: Step[]
+}, input: any)
 ```
 
-* `skill.logic`: array of steps
-* `input`: object
+## Output
 
-### Output
+```ts
+output: object
+```
 
-```js
+## Real behavior
+
+* membuat context:
+
+```ts
 {
-  ...output
+  input,
+  output: {},
+  memory: {}
 }
 ```
 
-### Behavior
+* loop step:
 
-* loop sequential
-* mutate `ctx.memory`
-* write ke `ctx.output`
+```ts
+for (step of logic)
+```
 
-### Masalah
+## ❌ Problem
 
-❌ Tidak ada:
+* tidak handle async awal (sebelum MCP upgrade)
+* tidak ada validation DSL sebelum run
+* tidak ada error isolation
 
-* schema validation
-* error boundary per step
-* timeout / guard
-
-### Fix
-
-**file: `/executor/runDSL.js`**
+## ✅ FIX
 
 ```js
-async function runDSL(skill, input) {
-  if (!Array.isArray(skill.logic)) {
-    throw new Error("Invalid DSL: logic must be array");
-  }
+// /executor/runDSL.js
+export async function runDSL(skill, input) {
+  validateDSL(skill); // WAJIB
 
   const ctx = {
     input,
     output: {},
-    memory: {}
+    memory: {},
+    steps: 0
   };
 
-  for (let i = 0; i < skill.logic.length; i++) {
-    try {
-      await executeStep(skill.logic[i], ctx);
-    } catch (e) {
-      throw new Error(`Step ${i} failed: ${e.message}`);
+  for (const step of skill.logic) {
+    if (ctx.steps++ > 100) {
+      throw new Error("Max steps exceeded");
     }
+
+    await executeStep(step, ctx);
   }
 
   return ctx.output;
@@ -89,264 +118,277 @@ async function runDSL(skill, input) {
 
 ---
 
-# 🔧 EXECUTOR — executeStep
+# 2. `executeStep`
 
-### Input
+📂 `/executor/executeStep.js`
 
-```js
-executeStep(step, ctx)
+📌 referensi: 
+
+## Input
+
+```ts
+(step: object, ctx: Context)
 ```
 
-### Output
+## Output
 
-* mutate ctx
-* no return
+```ts
+void | { jump: number }
+```
 
-### Masalah
+## Behavior
 
-❌ Tidak ada:
+switch berdasarkan `step.op`
 
-* type validation
-* unknown field guard
-* numeric safety
+---
 
-### Fix
+## ❌ Problem KRITIS
 
-**file: `/executor/executeStep.js`**
+### 1. Tight coupling (monolithic switch)
+
+Semua logic di satu function → tidak scalable
+
+---
+
+## ✅ FIX (MANDATORY REFACTOR)
 
 ```js
-if (!step.op) throw new Error("Missing op");
+// /executor/opRegistry.js
+export const ops = {
+  get,
+  set,
+  add,
+  subtract,
+  multiply,
+  divide,
+  concat,
+  mcp_call,
+  compare,
+  if: ifOp,
+  jump
+};
 
-if (["add","subtract","multiply","divide"].includes(step.op)) {
-  if (typeof step.a === "undefined" || typeof step.b === "undefined") {
-    throw new Error("Invalid arithmetic args");
+// /executor/executeStep.js
+export async function executeStep(step, ctx) {
+  const handler = ops[step.op];
+
+  if (!handler) {
+    throw new Error(`Unknown op: ${step.op}`);
   }
+
+  return handler(step, ctx);
 }
 ```
 
 ---
 
-# 🔵 MCP CALL
+# 3. `mcp_call`
 
-Referensi: 
+📂 `/executor/ops/mcp_call.js`
 
-## Fungsi: `mcp[tool]`
+📌 referensi: 
 
-### Input
-
-```js
-mcp["http.get"]({ url })
-```
-
-### Output
-
-```js
-{
-  status: number,
-  body: string
-}
-```
-
-## Fungsi: `executeStep (mcp_call)`
-
-### Input
+## Input
 
 ```json
 {
   "op": "mcp_call",
   "tool": "http.get",
-  "args": {...},
-  "to": "memoryKey"
+  "args": {},
+  "to": "var"
 }
 ```
 
-### Output
+## Output
 
-```js
-ctx.memory[memoryKey] = result
+```ts
+ctx.memory[to] = result
 ```
 
-### Masalah KRITIS
+---
 
-❌ Tidak ada:
+## ❌ Problem
 
-* timeout
-* retry
-* rate limit
-* error normalization
+### 1. Tidak ada timeout / retry
 
-### Fix
+### 2. Tidak ada sanitasi args
 
-**file: `/mcp/http.js`**
+### 3. Tidak ada schema normalization
+
+---
+
+## ✅ FIX
 
 ```js
-async function safeFetch(url, timeout = 5000) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout);
+export async function mcp_call(step, ctx) {
+  const tool = mcp[step.tool];
 
-  try {
-    const res = await fetch(url, { signal: controller.signal });
-    return {
-      status: res.status,
-      body: await res.text()
-    };
-  } catch (e) {
-    return { error: true, message: e.message };
-  } finally {
-    clearTimeout(id);
-  }
+  if (!tool) throw new Error("Invalid MCP tool");
+
+  const args = resolveObject(step.args, ctx);
+
+  const result = await Promise.race([
+    tool(args),
+    timeout(5000)
+  ]);
+
+  ctx.memory[step.to] = normalize(result);
 }
 ```
 
 ---
 
-# 🟡 CONDITIONAL + BRANCHING
+# 4. `compare`
 
-Referensi: 
+📂 `/executor/ops/compare.js`
 
-## Fungsi: `runDSL (pointer-based)`
+📌 referensi: 
 
-### Input
-
-```js
-skill.logic[]
-```
-
-### Output
-
-```js
-ctx.output
-```
-
-### Behavior
-
-* pakai `ip` (instruction pointer)
-* bisa jump
-
----
-
-## Fungsi: `compare`
-
-### Input
+## Input
 
 ```json
-{ a, b, operator, to }
+{
+  "op": "compare",
+  "a": "x",
+  "b": "y",
+  "operator": "==",
+  "to": "res"
+}
 ```
 
-### Output
+## Output
 
-```js
+```ts
 ctx.memory[to] = boolean
 ```
 
 ---
 
-## Fungsi: `if`
+## ❌ Problem
 
-### Input
+* pakai `==` bukan `===` → bug potensial
+
+---
+
+## ✅ FIX
+
+```js
+case "==": res = a === b; break;
+case "!=": res = a !== b; break;
+```
+
+---
+
+# 5. `if`
+
+## Input
 
 ```json
 {
-  "condition": "memoryKey",
-  "true_jump": number,
-  "false_jump": number
+  "op": "if",
+  "condition": "var",
+  "true_jump": 5,
+  "false_jump": 2
 }
 ```
 
-### Output
+## Output
 
-```js
-{ jump: index }
+```ts
+{ jump: number }
 ```
 
 ---
 
-## Masalah KRITIS
+## ❌ Problem
 
-❌ Tidak ada:
+* tidak validasi existence condition
+* tidak handle undefined
 
-* infinite loop guard (hanya disebut, tidak enforce)
-* invalid jump detection runtime
+---
 
-### Fix
-
-**file: `/executor/runDSL.js`**
+## FIX
 
 ```js
-const MAX_STEPS = 100;
-
-let counter = 0;
-
-while (ip < steps.length) {
-  if (counter++ > MAX_STEPS) {
-    throw new Error("Infinite loop detected");
-  }
+if (!(step.condition in ctx.memory)) {
+  throw new Error("Condition not found");
+}
 ```
 
 ---
 
-# 🟢 MAP
+# 6. `map`
 
-Referensi: 
+📂 `/executor/ops/map.js`
 
-## Fungsi: `map`
+📌 referensi: 
 
-### Input
+## Input
 
 ```json
 {
   "source": "input.items",
-  "steps": [],
-  "to": "mapped"
+  "steps": [...]
 }
 ```
 
-### Output
+## Output
 
-```js
-ctx.memory["mapped"] = [
-  { output: ... }
-]
+```ts
+ctx.memory[to] = Array<object>
 ```
 
 ---
 
-## Masalah
+## ❌ Problem KRITIS
 
-❌ Tidak ada:
-
-* deep clone protection
-* memory isolation safety
-* schema output enforcement
-
-### Fix
+### ❌ Memory leakage
 
 ```js
-results.push(JSON.parse(JSON.stringify(subCtx.output)));
+memory: {
+  ...ctx.memory
+}
+```
+
+→ mutation antar iterasi
+
+---
+
+## ✅ FIX
+
+```js
+memory: {
+  [step.as]: item,
+  ...(step.index_as ? { [step.index_as]: i } : {})
+}
 ```
 
 ---
 
-# 🟣 FILTER
+# 7. `filter`
 
-Referensi: 
+📂 `/executor/ops/filter.js`
 
-### Input
+📌 referensi: 
 
-* array
-* condition step
+## Input
 
-### Output
+array + condition steps
 
-```js
+## Output
+
 filtered array
-```
 
-### Masalah
+---
 
-❌ silent failure kalau condition undefined
+## ❌ Problem
 
-### Fix
+* tidak handle non-boolean result
+* silent failure
+
+---
+
+## FIX
 
 ```js
 if (typeof keep !== "boolean") {
@@ -356,263 +398,312 @@ if (typeof keep !== "boolean") {
 
 ---
 
-# 🟤 REDUCE
+# 8. `reduce`
 
-### Input
+## Input
 
 ```json
 {
-  "initial": 0,
-  "steps": [...]
+  "initial": 0
 }
 ```
 
-### Output
+## Output
 
-```js
-accumulator final
+```ts
+ctx.memory[to] = value
 ```
 
-### Masalah
+---
 
-❌ tidak validasi accumulator update
+## ❌ Problem
 
-### Fix
+* tidak handle undefined accumulator
+* mutation risk
+
+---
+
+## FIX
 
 ```js
-if (subCtx.memory[step.accumulator] === undefined) {
-  throw new Error("Reducer must update accumulator");
+if (acc === undefined) {
+  throw new Error("Accumulator undefined");
 }
 ```
 
 ---
 
-# 🧠 SKILL MEMORY
+# 9. `updateSkillStats`
 
-Referensi: 
+📂 `/memory/skillMemory.js`
 
-## Fungsi: `updateSkillStats`
+📌 referensi: 
 
-### Input
+## Input
 
-```js
-(skill, success)
+```ts
+(skill, success: boolean)
 ```
 
-### Output
+## Output
 
-* update DB
+update DB
 
-### Masalah KRITIS
+---
 
-❌ race condition (no transaction)
+## ❌ Problem
 
-### Fix
+* race condition (no transaction)
+* score drift tidak stabil
+
+---
+
+## FIX
 
 ```js
 await sequelize.transaction(async (t) => {
-  await skill.update({...}, { transaction: t });
+  await skill.reload({ transaction: t });
+
+  // update inside transaction
 });
 ```
 
 ---
 
-# 🧬 BANDIT
+# 10. `banditScore`
 
-Referensi: 
+📂 `/learning/bandit.js`
 
-## Fungsi: `banditScore`
+📌 referensi: 
 
-### Input
+## Input
 
-```js
+```ts
 (skill, totalSelections)
 ```
 
-### Output
+## Output
 
-```js
+```ts
 number
 ```
 
-### Masalah
+---
 
-❌ division bias early stage
+## ❌ Problem
 
-### Fix
-
-```js
-(skill.usage_count + 1e-6)
-```
+* log(0) risk
 
 ---
 
-# 🌳 TREE SEARCH
-
-Referensi: 
-
-## Fungsi: `treeSearch`
-
-### Input
+## FIX
 
 ```js
+Math.log(totalSelections + 1)
+```
+
+✔ sudah benar di code → GOOD
+
+---
+
+# 11. `treeSearch`
+
+📂 `/planner/treeSearch.js`
+
+📌 referensi: 
+
+## Input
+
+```ts
 initialState
 ```
 
-### Output
+## Output
 
-```js
+```ts
 best plan
 ```
 
-### Masalah KRITIS
+---
 
-❌ scoring random → tidak deterministic
+## ❌ Problem KRITIS
 
-```js
-score += Math.random() * 0.1
-```
-
-### Fix
-
-```js
-// remove randomness
-score += diversityMetric(state);
-```
+* scoring random → tidak deterministic
+* tidak pakai world/belief
+* tidak validasi step executable
 
 ---
 
-# 🧠 MULTI-AGENT
-
-Referensi: 
-
-## Fungsi: `runMultiAgent`
-
-### Input
+## FIX
 
 ```js
-input
-```
-
-### Output
-
-```js
-result
-```
-
-### Masalah KRITIS
-
-❌ Tidak benar-benar autonomous:
-
-* hanya 1 refinement loop
-* tidak ada scheduler
-* tidak persistent state
-
----
-
-# 🔥 BLACKBOARD
-
-Referensi: 
-
-## Fungsi: `BlackboardStore`
-
-### Input
-
-```js
-set(patch)
-update(path, value)
-```
-
-### Output
-
-* state mutation
-
-### Masalah
-
-❌ shallow update → corrupt nested state
-
-### Fix
-
-```js
-this.state = deepMerge(this.state, patch);
-```
-
----
-
-# ⚠️ FINAL CRITICAL GAP
-
-## 1. TIDAK ADA ENTRY POINT REAL
-
-Tidak ada:
-
-```js
-index.js / server.js / main loop
-```
-
----
-
-## 2. TIDAK ADA INTEGRASI END-TO-END
-
-Semua ini:
-
-* DSL
-* Planner
-* Memory
-* Blackboard
-
-❌ tidak pernah disatukan
-
----
-
-## 3. SYSTEM BELUM AUTONOMOUS
-
-Karena:
-
-* tidak ada loop berkelanjutan
-* tidak ada goal scheduler real
-* tidak ada persistence runtime
-
----
-
-# 🧨 KESIMPULAN KERAS
-
-Repo ini:
-
-> ❌ BELUM IMPLEMENTASI SYSTEM
-> ✅ MASIH DESIGN BLUEPRINT LEVEL ADVANCED
-
----
-
-# 🚀 PRIORITAS FIX (WAJIB)
-
-1. **/core/agent.js**
-
-```js
-while (true) {
-  const goal = selectGoal();
-  const plan = plan(goal);
-  const result = execute(plan);
-  evaluate(result);
+function scoreState(state) {
+  return (
+    1 / (state.steps.length + 1) +
+    evaluateFeasibility(state) +
+    evaluateGoalMatch(state)
+  );
 }
 ```
 
-2. **/executor/**
+---
 
-* runDSL.js
-* executeStep.js
+# 12. `runMultiAgent`
 
-3. **/mcp/**
+📂 `/orchestrator/runMultiAgent.js`
 
-* http.js (with timeout)
+📌 referensi: 
 
-4. **/memory/**
+## Input
 
-* skillMemory.js
-* episodicMemory.js
+```ts
+input: string
+```
+
+## Output
+
+```ts
+result
+```
 
 ---
 
-Kalau kamu mau, saya bisa lanjut:
+## ❌ Problem PALING BESAR
 
-👉 audit REAL code repo (bukan doc)
-👉 atau bangun skeleton project dari ini (ready jalan Node.js)
+* tidak ada loop scheduler
+* tidak pakai blackboard
+* tidak persistent memory
+* tidak parallel
+
+👉 ini cuma sequential pipeline
+
+---
+
+## FIX (WAJIB)
+
+Gabungkan dengan blackboard:
+
+```js
+export async function runAgent(input) {
+  const bb = new BlackboardStore();
+
+  bb.set({
+    goal: input,
+    status: "planning"
+  });
+
+  await schedulerLoop(bb);
+
+  return bb.state.execution.result;
+}
+```
+
+---
+
+# 13. `BlackboardStore`
+
+📂 `/core/blackboard.js`
+
+📌 referensi: 
+
+## Input
+
+```ts
+set(patch)
+```
+
+## Output
+
+update state
+
+---
+
+## ❌ Problem
+
+* tidak immutable deep update
+* tidak ada locking
+* tidak async-safe
+
+---
+
+## FIX
+
+```js
+set(patch) {
+  this.state = structuredClone({
+    ...this.state,
+    ...patch
+  });
+}
+```
+
+---
+
+# 🚨 GAP TERBESAR DARI CHANGELOG
+
+| Feature           | Status               |
+| ----------------- | -------------------- |
+| DSL engine        | ✅ ada                |
+| MCP               | ✅ ada                |
+| branching         | ✅ ada                |
+| map/filter/reduce | ✅ ada                |
+| memory            | ⚠️ parsial           |
+| planner           | ❌ tidak terintegrasi |
+| multi-agent       | ❌ hanya konsep       |
+| blackboard        | ❌ tidak dipakai      |
+| world model       | ❌ tidak dipakai      |
+| simulation        | ❌ tidak dipakai      |
+| curiosity         | ❌ tidak dipakai      |
+| meta reasoning    | ❌ tidak dipakai      |
+| self-modifying    | ❌ tidak dipakai      |
+
+---
+
+# 🔥 KESIMPULAN KERAS
+
+1. **Executor DSL = bagian paling matang**
+2. **Semua layer AI (planner → meta) = masih blueprint**
+3. **Belum ada true autonomous loop**
+4. **System masih “tool runner”, bukan agent**
+
+---
+
+# 🚀 PRIORITAS PERBAIKAN (WAJIB URUT)
+
+## 1. Satukan runtime
+
+📂 `/orchestrator/agent.js`
+
+```js
+runAgent → schedulerLoop → blackboard → executor
+```
+
+---
+
+## 2. Refactor executor (registry-based)
+
+📂 `/executor/`
+
+---
+
+## 3. Integrasi memory + planner
+
+📂 `/planner/ + /memory/`
+
+---
+
+## 4. Baru aktifkan:
+
+* world model
+* simulation
+* meta reasoning
+
+---
+
+Kalau kamu mau, next step paling penting:
+
+👉 saya bisa **audit langsung isi repo GitHub real (file per file, bukan doc)** dan tunjukkan:
+
+* bagian mana yang fake implementation
+* bagian mana yang benar-benar jalan
+* bagian mana yang akan crash saat runtime
