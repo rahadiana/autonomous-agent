@@ -1,431 +1,459 @@
-Saya sudah membaca struktur yang kamu kirim (bukan sekadar lihat sekilas). Secara konsep, arsitektur kamu **sudah masuk kategori advanced agent system**, tapi implementasinya masih banyak “lubang fatal” yang bikin ini belum bisa benar-benar mencapai tujuan: *self-improving autonomous agent*.
+Saya sudah baca struktur arsitektur + potongan implementasi dari file kamu. Secara konsep, ini **sudah sangat ambisius dan cukup lengkap**, tapi ada gap besar antara:
 
-Saya akan langsung ke poin kritis + perbaikan konkret (dengan kode yang bisa langsung kamu tempel).
+> ❗ *arsitektur di dokumen* vs *kode yang benar-benar enforce behavior tersebut*
+
+Saya akan kritik secara **tajam + implementable**, bukan teori.
 
 ---
 
-# 🔴 1. MASALAH PALING KRITIS (FOUNDATION FAILURE)
+# 🔴 1. MASALAH UTAMA (CORE FAILURE)
 
-## ❌ 1.1 Sistem kamu terlalu “design-heavy”, belum “execution-solid”
+## ❌ 1.1 Sistem kamu masih “LLM-driven”, bukan “system-driven”
 
-Dari file yang kamu punya:
+Dari file system prompt & flow:
 
-* planner ✅
-* critic ✅
-* mutation ✅
-* blackboard ✅
-* curiosity ✅
+* agent disuruh:
+
+  * generate skill
+  * test
+  * evaluate
+  * improve
 
 Tapi:
 
-👉 **executor + validator + test system belum jadi core yang kuat**
+👉 **tidak ada enforcement di runtime**
 
-Padahal ini jantung sistem.
-
-Kalau ini lemah:
-
-> semua layer di atas cuma simulasi AI
-
----
-
-## 🔧 FIX WAJIB
-
-Tambahkan **execution contract enforcement layer**
-
-### sebelum execute:
+Contoh di backend flow: 
 
 ```ts
-function validateStep(step, capabilities) {
-  if (!capabilities.includes(step.capability)) {
-    throw new Error(`Invalid capability: ${step.capability}`);
-  }
-
-  if (typeof step.input !== "object") {
-    throw new Error("Invalid step input");
-  }
+if (evaluation.score >= 0.8) {
+  await registry.save(skill);
+  return executor.run(skill, input);
 }
 ```
-
----
-
-### patch ke executor kamu:
-
-```ts
-async function executePlan(plan, input, capabilities) {
-  let ctx = input;
-
-  for (const step of plan.steps) {
-    validateStep(step, capabilities); // 🔴 WAJIB
-
-    ctx = await runCapability(step.capability, step.input, ctx);
-  }
-
-  return ctx;
-}
-```
-
----
-
-# 🔴 2. SKILL SYSTEM KAMU BELUM “SURVIVE”
-
-Dari sistem learning kamu :
 
 Masalah:
 
-* score update terlalu linear
-* tidak ada confidence
-* tidak ada uncertainty
+* evaluator = heuristik lemah
+* test = minimal
+* skill langsung masuk registry
+
+👉 Ini bikin:
+
+* garbage skill masuk DB
+* system degrade seiring waktu
 
 ---
 
-## 🔧 FIX: Tambahkan CONFIDENCE + UNCERTAINTY
+## ✅ FIX (WAJIB)
 
-Upgrade schema:
+Tambahkan **hard gate evaluator + multi-test**
+
+### Replace ini:
 
 ```ts
-confidence: DataTypes.FLOAT,
-uncertainty: DataTypes.FLOAT,
+if (evaluation.score >= 0.8)
 ```
 
----
-
-### update logic:
+### Jadi:
 
 ```ts
-function updateStats(skill, success) {
-  const alpha = 0.1;
+const passRate = await testSkill(skill, testCases);
 
-  const reward = success ? 1 : 0;
-
-  const newScore =
-    (1 - alpha) * skill.score +
-    alpha * reward;
-
-  const uncertainty =
-    Math.sqrt(1 / (skill.usage_count + 1));
-
-  return {
-    score: newScore,
-    uncertainty
-  };
+if (passRate < 0.8) {
+  continue; // reject
 }
-```
 
-👉 ini bikin sistem kamu:
-
-* lebih stabil
-* tidak overfit cepat
-
----
-
-# 🔴 3. BANDIT STRATEGY SUDAH ADA — TAPI SALAH LEVEL
-
-Kamu pakai UCB 
-Masalah:
-
-👉 kamu pakai di **skill selection**, bukan **plan selection**
-
-Ini salah.
-
----
-
-## 🔧 FIX: pindahkan bandit ke PLAN LEVEL
-
-```ts
-function planScore(plan, stats, totalRuns) {
-  return (
-    stats.score +
-    1.2 * Math.sqrt(Math.log(totalRuns) / (stats.usage + 1))
-  );
+// secondary validation
+if (!strictSchemaCheck(skill)) {
+  continue;
 }
+
+// only then save
+await registry.save(skill);
 ```
 
 ---
 
-### di orchestrator:
+# 🔴 2. EXECUTOR MASIH TERLALU BERBAHAYA
+
+Kamu pakai:
 
 ```ts
-const bestPlan = plans
-  .map(p => ({
-    plan: p,
-    score: planScore(p, getStats(p), totalRuns)
-  }))
-  .sort((a, b) => b.score - a.score)[0].plan;
+const script = new vm.Script(skill.logic);
+script.runInContext(context);
 ```
-
-👉 dampak:
-
-* eksplorasi lebih meaningful
-* bukan cuma ganti skill kecil
-
----
-
-# 🔴 4. BLACKBOARD SYSTEM KAMU BERBAHAYA (RACE CONDITION)
-
-Dari implementasi kamu :
 
 Masalah:
 
-* `set()` langsung overwrite
-* tidak ada versioning
-* tidak ada locking
+* masih bisa infinite loop
+* masih bisa memory abuse
+* tidak ada step control
 
 ---
 
-## 🔧 FIX: Tambahkan VERSION CONTROL
+## ✅ FIX: STEP-BASED INTERPRETER (JANGAN VM LANGSUNG)
+
+Gunakan DSL interpreter seperti di MCP file: 
+
+### Ganti executor:
 
 ```ts
-class BlackboardStore {
-  constructor() {
-    this.state = {};
-    this.version = 0;
+export async function runDSL(skill, input) {
+  const ctx = { input, output: {}, memory: {} };
+
+  for (const step of skill.logic) {
+    await executeStep(step, ctx);
   }
 
-  set(patch) {
-    this.version++;
-
-    this.state = {
-      ...this.state,
-      ...patch,
-      _version: this.version
-    };
-  }
+  return ctx.output;
 }
 ```
 
+👉 ini:
+
+* deterministic
+* traceable
+* bisa di-limit
+
 ---
 
-## 🔧 FIX: CAS (compare-and-set)
+# 🔴 3. SKILL REGISTRY BELUM “EVOLUTIONARY”
+
+Kamu masih pakai:
 
 ```ts
-function safeUpdate(bb, expectedVersion, patch) {
-  if (bb.state._version !== expectedVersion) {
-    return false; // reject
-  }
-
-  bb.set(patch);
-  return true;
-}
+score
 ```
 
-👉 ini mencegah:
+Padahal kamu sendiri sudah desain sistem lengkap: 
 
-* state corruption
-* agent saling tabrak
-
----
-
-# 🔴 5. HIERARCHICAL PLANNER BELUM TERKONTROL
-
-Dari design kamu :
-
-Masalah:
-
-* tidak ada cost control
-* tidak ada pruning
-* tidak ada plan caching
+👉 tapi belum diintegrasikan ke runtime
 
 ---
 
-## 🔧 FIX: tambahkan COST MODEL
+## ❌ Missing:
+
+* usage_count
+* success_count
+* decay
+* versioning
+* lineage
+
+---
+
+## ✅ FIX (WAJIB IMPLEMENT)
+
+Tambahkan schema:
 
 ```ts
-function estimateCost(plan) {
-  return plan.steps.length * 0.1;
-}
+score: DataTypes.FLOAT,
+usage_count: DataTypes.INTEGER,
+success_count: DataTypes.INTEGER,
+failure_count: DataTypes.INTEGER,
+version: DataTypes.INTEGER,
+parent_id: DataTypes.UUID,
+last_used_at: DataTypes.DATE
 ```
 
 ---
 
-### reject plan mahal:
+## Tambahkan hook di execution:
 
 ```ts
-if (estimateCost(plan) > 1.0) {
-  return null;
-}
+const result = await runDSL(skill, input);
+const success = validate(skill.output_schema, result).valid;
+
+await updateSkillStats(skill, success);
 ```
 
 ---
 
-## 🔧 FIX: PLAN CACHE
+# 🔴 4. BELUM ADA SKILL SELECTION YANG CERDAS
+
+Saat ini:
+
+* kemungkinan cuma ambil 1 skill (exact match)
+
+Padahal kamu sudah desain bandit: 
+
+---
+
+## ❌ Masalah:
+
+* tidak ada exploration
+* tidak ada kompetisi skill
+* stagnasi
+
+---
+
+## ✅ FIX
+
+Ganti selection:
 
 ```ts
-const planCache = new Map();
+const skills = await findSkills(capability);
 
-function cachePlan(goal, plan) {
-  planCache.set(goal, plan);
-}
-
-function getCachedPlan(goal) {
-  return planCache.get(goal);
-}
+const best = selectSkillWithBandit(skills);
 ```
 
-👉 kamu sudah punya arah ke episodic memory, tapi belum dipakai efektif
+---
+
+# 🔴 5. PLANNER MASIH LINEAR (AKAN MENTOK)
+
+Kamu sudah punya hierarchical planning: 
+
+Tapi kemungkinan belum terintegrasi ke runtime utama.
 
 ---
 
-# 🔴 6. MUTATION SYSTEM MASIH NAIVE
+## ❌ Masalah:
 
-Dari implementasi kamu :
+* agent tidak bisa handle:
 
-Masalah:
-
-* random mutation
-* tidak guided
-* tidak aware failure
+  * multi-step workflow
+  * dependency
+  * data pipeline
 
 ---
 
-## 🔧 FIX: FAILURE-DRIVEN MUTATION
+## ✅ FIX
+
+Tambahkan pipeline:
 
 ```ts
-function mutateBasedOnFailure(skill, failure) {
-  const newSkill = structuredClone(skill);
+const macro = await macroPlanner(input);
 
-  if (failure.type === "schema_error") {
-    newSkill.logic.push({
-      op: "normalize_output"
-    });
-  }
+const ordered = resolveOrder(macro.subgoals);
 
-  if (failure.type === "missing_step") {
-    newSkill.logic.unshift({
-      op: "validate_input"
-    });
-  }
-
-  return newSkill;
+for (const g of ordered) {
+  const micro = await microPlanner(g.goal);
+  const result = await executePlan(micro.plan);
 }
 ```
 
-👉 ini jauh lebih kuat dibanding random
+---
+
+# 🔴 6. BLACKBOARD SYSTEM BELUM JADI “CONTROL CENTER”
+
+Kamu sudah punya desain: 
+
+Tapi biasanya implementasi awal:
+
+* masih function chaining
+* belum event-driven
 
 ---
 
-# 🔴 7. KAMU BELUM PUNYA “GLOBAL OBJECTIVE FUNCTION”
+## ❌ Masalah:
 
-Sekarang sistem kamu optimize:
-
-* skill score
-* plan score
-* execution
-
-Tapi tidak ada:
-
-👉 **global optimization target**
+* agent tidak benar-benar multi-agent
+* tidak ada coordination
 
 ---
 
-## 🔧 FIX: GLOBAL SCORE
+## ✅ FIX
+
+Minimal implement:
 
 ```ts
-function globalScore({
-  success,
-  latency,
-  cost
-}) {
-  return (
-    success * 0.6 +
-    (1 / (1 + latency)) * 0.2 +
-    (1 / (1 + cost)) * 0.2
-  );
-}
+blackboard.set({
+  goal: input,
+  status: "planning"
+});
 ```
 
----
-
-Gunakan ini di:
-
-* plan selection
-* skill update
-* mutation evaluation
-
----
-
-# 🔴 8. SYSTEM KAMU BELUM “SELF-CORRECTING”
-
-Sekarang:
-
-* planner bikin plan
-* critic nilai
-
-Tapi:
-
-👉 tidak ada feedback masuk ke **capability model**
-
----
-
-## 🔧 FIX: UPDATE CAPABILITY EMBEDDING
+Agent:
 
 ```ts
-async function updateCapabilityEmbedding(skill, feedback) {
-  const improvedDesc =
-    skill.description + " " + feedback.join(" ");
+blackboard.subscribe(async (state) => {
+  if (state.status !== "planning") return;
 
-  skill.embedding = await embed(improvedDesc);
+  const plans = await plannerAgent(state.goal);
 
-  await skill.save();
+  blackboard.set({
+    plans,
+    status: "executing"
+  });
+});
+```
+
+---
+
+# 🔴 7. BELUM ADA PRIORITY CONTROL → CHAOS SOON
+
+Tanpa scheduler:
+
+* semua agent jalan bersamaan
+* race condition
+
+Padahal kamu sudah desain: 
+
+---
+
+## ✅ FIX
+
+Tambahkan scheduler:
+
+```ts
+const runnable = agents
+  .filter(a => a.canRun(state))
+  .sort((a, b) => computePriority(b) - computePriority(a));
+
+await runnable[0].run();
+```
+
+---
+
+# 🔴 8. SELF-IMPROVEMENT MASIH “ILUSI”
+
+Kamu bilang:
+
+> agent belajar sendiri
+
+Realita:
+
+👉 tanpa ini, dia tidak belajar:
+
+* test case kuat ❌
+* evaluator kuat ❌
+* feedback loop real ❌
+
+---
+
+## ✅ FIX
+
+Tambahkan:
+
+### 1. multiple test cases
+
+```ts
+[
+  { input: { a: 1, b: 2 } },
+  { input: { a: 0, b: 0 } },
+  { input: { a: -1, b: 5 } }
+]
+```
+
+---
+
+### 2. scoring real
+
+```ts
+score =
+  correctness * 0.5 +
+  schema * 0.2 +
+  stability * 0.2 +
+  performance * 0.1;
+```
+
+---
+
+# 🔴 9. MCP SUDAH BAGUS, TAPI BELUM DI-CACHE
+
+Dari desain MCP: 
+
+---
+
+## ❌ Masalah:
+
+* API dipanggil berulang
+* latency tinggi
+* scoring bias
+
+---
+
+## ✅ FIX
+
+Tambahkan cache:
+
+```ts
+const cache = new Map();
+
+async function cachedCall(tool, args) {
+  const key = JSON.stringify({ tool, args });
+
+  if (cache.has(key)) return cache.get(key);
+
+  const result = await mcp[tool](args);
+
+  cache.set(key, result);
+
+  return result;
 }
 ```
 
 ---
 
-# 🔴 9. REALITY CHECK (INI PENTING)
+# 🔴 10. KAMU SUDAH OVER-ENGINEER (INI PENTING)
 
-Sistem kamu saat ini:
+Jujur:
 
-✔ modular
-✔ adaptive
-✔ evolving
+👉 kamu sudah desain sistem level:
 
-Tapi belum:
+* cognitive architecture
+* multi-agent
+* self-improving
 
-❌ stable
-❌ efficient
-❌ production-safe
+Tapi implementasi belum kuat di:
 
----
-
-# 🧠 SUMMARY (JUJUR)
-
-Yang sudah bagus:
-
-* arsitektur sangat lengkap
-* sudah masuk level research-grade design
-* semua komponen besar sudah ada
-
-Yang bermasalah:
-
-* eksekusi belum kuat
-* kontrol sistem kurang
-* learning belum benar-benar robust
+* executor
+* validator
+* test system
 
 ---
 
-# 🎯 PRIORITAS PERBAIKAN (URUTAN WAJIB)
+## ❗ Prioritas REAL (jangan lompat)
 
-Jangan lompat.
+Urutan yang benar:
 
-1. **Executor + Validator HARDENING**
-2. **Blackboard consistency (version + CAS)**
-3. **Plan-level bandit (bukan skill-level)**
-4. **Failure-driven mutation**
-5. **Global scoring system**
-6. **Plan cache + cost control**
+### 1. ✅ Executor DSL stabil
+
+### 2. ✅ Validator + test runner kuat
+
+### 3. ✅ Skill registry + scoring
+
+### 4. ⛔ baru:
+
+* planner
+* multi-agent
+* curiosity
 
 ---
 
-Kalau kamu lanjut tanpa ini:
+# 🧠 KESIMPULAN (REAL TALK)
 
-👉 sistem kamu akan terlihat “pintar”, tapi sebenarnya tidak belajar
+Sistem kamu:
+
+### ✅ Kuat di:
+
+* arsitektur (sangat advanced)
+* modular design
+* visi (jelas dan benar arah)
+
+### ❌ Lemah di:
+
+* enforcement runtime
+* quality control
+* execution safety
+* evaluasi skill
 
 ---
 
-Kalau kamu mau saya lanjut, pilih satu:
+# 🎯 NEXT STEP (WAJIB, BUKAN OPSIONAL)
 
-* “bedah executor biar production-grade”
-* “refactor blackboard jadi distributed-safe”
-* “bikin evaluator yang beneran bisa ngajarin agent”
+Pilih satu:
 
-Saya akan paksa kamu ke implementasi, bukan teori lagi.
+1. **“refactor executor jadi DSL interpreter full + safe”**
+2. **“buat test runner + evaluator yang benar-benar kuat”**
+3. **“implement skill registry evolution (decay + reinforcement)”**
+
+Kalau kamu lanjut ke:
+
+* curiosity
+* self-modifying
+* world model
+
+👉 sebelum 3 hal di atas beres
+
+**→ sistem kamu akan terlihat pintar, tapi sebenarnya rapuh.**
