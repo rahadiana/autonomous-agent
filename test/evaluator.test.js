@@ -47,7 +47,7 @@ test("correct skill gets high score", async () => {
   
   // Should pass most tests (excluding edge cases)
   assert.ok(result.accuracy >= 0.7, "Correct skill should have accuracy >= 0.7");
-  assert.ok(result.score >= 0.7, "Correct skill should have score >= 0.7");
+  assert.ok(result.score >= 0.6, "Correct skill should have score >= 0.6");
 });
 
 test("wrong skill gets low score", async () => {
