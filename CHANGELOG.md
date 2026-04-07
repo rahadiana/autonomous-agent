@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.8.3] - 2026-04-07
+
+### Summary
+Enhanced testBuilder with schema-driven test generation per next_plan.md. All 226 tests pass.
+
+### Fixed/Enhanced
+
+#### 1. Schema-Driven Test Builder (NEW)
+- **`core/testBuilder.js`** - Enhanced test generation
+  - Added `generateFromSchema()` function for schema-based test generation
+  - Now uses `input_schema` for test case generation (was incorrectly using output_schema)
+  - Added expected output field to all test cases (expected: null for error handling)
+  - Generates base test, empty test, null test + schema-specific edge cases
+
+#### 2. Test Fixes (TEST FIX)
+- **`test/testBuilder.test.js`** - Fixed null input handling
+  - Fixed 3 tests to handle null inputs in test case filtering
+  - Tests now check `t.input && t.input.value` instead of direct property access
+
+---
+
 ## [1.8.2] - 2026-04-07
 
 ### Summary

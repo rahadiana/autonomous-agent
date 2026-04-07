@@ -1,26 +1,59 @@
+export function generateFromSchema(schema) {
+  if (!schema?.properties) return {};
+  
+  const obj = {};
+  
+  for (const key in schema.properties) {
+    const prop = schema.properties[key];
+    
+    if (prop.type === "number") obj[key] = 1;
+    if (prop.type === "string") obj[key] = "test";
+    if (prop.type === "boolean") obj[key] = true;
+  }
+  
+  return obj;
+}
+
 export function buildTestCases(skill) {
   const tests = [];
+  
+  const schema = skill.input_schema || skill.output_schema || {};
+  const inputSchema = skill.input_schema || {};
+  const base = generateFromSchema(inputSchema);
+  
+  tests.push({
+    input: base,
+    expected: null
+  });
+  
+  tests.push({
+    input: {},
+    expected: null
+  });
+  
+  tests.push({
+    input: null,
+    expected: null
+  });
 
-  tests.push({ input: {} });
-
-  if (skill.output_schema?.properties) {
-    const props = skill.output_schema.properties;
+  if (schema.properties) {
+    const props = schema.properties;
     
-    for (const [key, schema] of Object.entries(props)) {
-      if (schema.type === "number") {
-        tests.push({ input: { [key]: 0 } });
-        tests.push({ input: { [key]: 1 } });
-        tests.push({ input: { [key]: -1 } });
+    for (const [key, schemaDef] of Object.entries(props)) {
+      if (schemaDef.type === "number") {
+        tests.push({ input: { [key]: 0 }, expected: null });
+        tests.push({ input: { [key]: 1 }, expected: null });
+        tests.push({ input: { [key]: -1 }, expected: null });
       }
       
-      if (schema.type === "string") {
-        tests.push({ input: { [key]: "" } });
-        tests.push({ input: { [key]: "test" } });
+      if (schemaDef.type === "string") {
+        tests.push({ input: { [key]: "" }, expected: null });
+        tests.push({ input: { [key]: "test" }, expected: null });
       }
       
-      if (schema.type === "boolean") {
-        tests.push({ input: { [key]: true } });
-        tests.push({ input: { [key]: false } });
+      if (schemaDef.type === "boolean") {
+        tests.push({ input: { [key]: true }, expected: null });
+        tests.push({ input: { [key]: false }, expected: null });
       }
     }
   }

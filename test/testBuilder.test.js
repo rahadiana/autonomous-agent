@@ -21,7 +21,7 @@ test("buildTestCases generates number test cases", () => {
 
   const tests = buildTestCases(skill);
 
-  const numberTests = tests.filter(t => t.input.value !== undefined);
+  const numberTests = tests.filter(t => t.input && t.input.value !== undefined);
   assert.ok(numberTests.length >= 3);
 });
 
@@ -36,7 +36,7 @@ test("buildTestCases generates string test cases", () => {
 
   const tests = buildTestCases(skill);
 
-  const stringTests = tests.filter(t => t.input.name !== undefined);
+  const stringTests = tests.filter(t => t.input && t.input.name !== undefined);
   assert.ok(stringTests.length >= 2);
 });
 
@@ -51,7 +51,7 @@ test("buildTestCases generates boolean test cases", () => {
 
   const tests = buildTestCases(skill);
 
-  const boolTests = tests.filter(t => t.input.flag !== undefined);
+  const boolTests = tests.filter(t => t.input && t.input.flag !== undefined);
   assert.strictEqual(boolTests.length, 2);
 });
 
