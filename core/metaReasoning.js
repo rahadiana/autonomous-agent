@@ -392,6 +392,36 @@ export class MetaReasoningLayer {
     this.currentStrategy = this.strategyController.getDefaultStrategy();
     this.cycleCount = 0;
     this.improvementHistory = [];
+    
+    this.forbiddenTargets = new Set(["executor", "scheduler", "blackboard", "security", "auth"]);
+    this.auditLog = [];
+    this.maxAuditEntries = 1000;
+  }
+
+  async auditModification(mod) {
+    if (mod.target && this.forbiddenTargets.has(mod.target)) {
+      this.addAuditEntry({ modification: mod, result: "rejected", reason: "Forbidden target" });
+      return { accepted: false, reason: "Forbidden modification target" };
+    }
+    
+    if (mod.action === "delete" && mod.target === "skill") {
+      this.addAuditEntry({ modification: mod, result: "rejected", reason: "Cannot delete skills" });
+      return { accepted: false, reason: "Cannot delete skills directly" };
+    }
+    
+    this.addAuditEntry({ modification: mod, result: "accepted", scoreDiff: 0 });
+    return { accepted: true };
+  }
+
+  addAuditEntry(entry) {
+    this.auditLog.push({ ...entry, timestamp: Date.now() });
+    if (this.auditLog.length > this.maxAuditEntries) {
+      this.auditLog.shift();
+    }
+  }
+
+  getAuditLog(limit = 100) {
+    return this.auditLog.slice(-limit);
   }
 
   analyzeAndImprove(coordinatorState) {

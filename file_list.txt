@@ -106,6 +106,7 @@ unifiedExecutor.js
 validator.js
 vectorStore.js
 versioning.js
+worldModel.js
 
 ./core/evaluation:
 dataset.js
