@@ -41,16 +41,42 @@ export class Planner {
     this.getActionsFn = options.getActionsFn || (() => []);
     this.applyActionFn = options.applyActionFn || ((state, action) => state);
     this.isGoalFn = options.isGoalFn || ((state, goal) => false);
+    
+    this.planCache = new Map();
+    this.maxCost = options.maxCost || 1.0;
   }
 
   defaultHeuristic(state, goal) {
     return 0;
   }
 
+  estimateCost(plan) {
+    if (!plan || !plan.bestPath) return 0;
+    return plan.bestPath.length * 0.1;
+  }
+
+  cachePlan(goal, plan) {
+    const goalKey = typeof goal === "string" ? goal : JSON.stringify(goal);
+    this.planCache.set(goalKey, {
+      plan,
+      cachedAt: Date.now()
+    });
+  }
+
+  getCachedPlan(goal) {
+    const goalKey = typeof goal === "string" ? goal : JSON.stringify(goal);
+    return this.planCache.get(goalKey);
+  }
+
+  clearCache() {
+    this.planCache.clear();
+  }
+
   search(startState, goal, options = {}) {
     const maxDepth = options.maxDepth || this.maxDepth;
     const maxNodes = options.maxNodes || this.maxNodes;
     const timeout = options.timeout || 5000;
+    const maxCost = options.maxCost || this.maxCost;
 
     const startTime = Date.now();
     let nodesExplored = 0;
@@ -72,6 +98,10 @@ export class Planner {
       const current = queue.shift();
 
       if (this.isGoalFn(current.state, goal)) {
+        const cost = this.estimateCost({ bestPath: current.getPath() });
+        if (cost > maxCost) {
+          return this.createResult(root, "cost_exceeded");
+        }
         return this.createResult(current, "success", current.getPath());
       }
 

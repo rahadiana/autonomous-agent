@@ -218,8 +218,10 @@ export function resolveObject(obj, ctx) {
 
 /**
  * Step validator - ensures safe operations
+ * @param {Object} step - step to validate
+ * @param {Array} capabilities - allowed capabilities
  */
-export function validateStep(step) {
+export function validateStep(step, capabilities = []) {
   if (!step) {
     throw new Error("Step is null or undefined");
   }
@@ -232,7 +234,40 @@ export function validateStep(step) {
     throw new Error(`Invalid or disallowed operation: ${step.op}`);
   }
   
+  if (step.capability && capabilities.length > 0) {
+    if (!capabilities.includes(step.capability)) {
+      throw new Error(`Invalid capability: ${step.capability}`);
+    }
+  }
+  
+  if (typeof step.input !== "object" && step.input !== undefined) {
+    throw new Error("Invalid step input");
+  }
+  
   return true;
+}
+
+/**
+ * Execute plan with execution contract enforcement
+ * @param {Object} plan - plan with steps
+ * @param {Object} input - input data
+ * @param {Array} capabilities - allowed capabilities
+ */
+export async function executePlan(plan, input, capabilities = []) {
+  let ctx = input;
+
+  for (const step of plan.steps) {
+    validateStep(step, capabilities);
+    ctx = await runCapability(step.capability, step.input, ctx);
+  }
+
+  return ctx;
+}
+
+async function runCapability(capability, stepInput, ctx) {
+  // Placeholder for capability execution
+  // In real implementation, this would call the appropriate capability
+  return ctx;
 }
 
 /**

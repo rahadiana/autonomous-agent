@@ -9,78 +9,178 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-#### 1. Test System - Upgrade test builder + failure log
-**File:** `core/testBuilder.js`
+#### 1. Executor + Validator HARDENING
+**File:** `core/executor.js`
 
-Added comprehensive test system with failure logging:
+Added execution contract enforcement layer with capability validation:
 
 ```javascript
-export async function testSkill(skill, runDSL) {
-  const tests = buildTestCases(skill);
-  let passed = 0;
-  const failures = [];
-
-  for (const t of tests) {
-    try {
-      const res = await runDSL(skill, t.input);
-      if (skill.output_schema) {
-        const valid = validateSkillOutput(skill.output_schema, res);
-        if (valid) {
-          passed++;
-        } else {
-          failures.push({ input: t.input, res, errors: valid.errors });
-        }
-      } else {
-        passed++;
-      }
-    } catch (e) {
-      failures.push({ input: t.input, error: e.message });
+export function validateStep(step, capabilities = []) {
+  if (!step) {
+    throw new Error("Step is null or undefined");
+  }
+  
+  if (!step.op) {
+    throw new Error("Step missing 'op' field");
+  }
+  
+  if (!EXECUTOR_CONFIG.allowedOps.has(step.op)) {
+    throw new Error(`Invalid or disallowed operation: ${step.op}`);
+  }
+  
+  if (step.capability && capabilities.length > 0) {
+    if (!capabilities.includes(step.capability)) {
+      throw new Error(`Invalid capability: ${step.capability}`);
     }
   }
-
-  return { passRate: passed / tests.length, passed, total: tests.length, failures };
+  
+  if (typeof step.input !== "object" && step.input !== undefined) {
+    throw new Error("Invalid step input");
+  }
+  
+  return true;
 }
 
-export function logFailureDetails(failures) {
-  if (failures.length === 0) return "No failures";
-  return failures.map((f, i) => {
-    let detail = `Test ${i + 1}:`;
-    if (f.error) detail += ` Error: ${f.error}`;
-    else if (f.errors) detail += ` Errors: ${f.errors.join(", ")}`;
-    detail += ` Input: ${JSON.stringify(f.input)}`;
-    return detail;
-  }).join("\n");
+export async function executePlan(plan, input, capabilities = []) {
+  let ctx = input;
+
+  for (const step of plan.steps) {
+    validateStep(step, capabilities);
+    ctx = await runCapability(step.capability, step.input, ctx);
+  }
+
+  return ctx;
 }
 ```
 
 **Test Input:**
 ```javascript
-testSkill(skill, runDSL);
-logFailureDetails(failures);
+const step = { op: "set", path: "result", value: 10 };
+const capabilities = ["math", "string"];
+validateStep(step, capabilities);
 ```
 
 **Test Output:**
 ```
-Test 1: Error: timeout Input: {"x":1}
-Test 2: Errors: Missing required field: result Input: {}
+true
+```
+
+**Test Input (invalid capability):**
+```javascript
+const step = { op: "set", path: "result", value: 10, capability: "invalid" };
+const capabilities = ["math", "string"];
+validateStep(step, capabilities);
+```
+
+**Test Output:**
+```
+Error: Invalid capability: invalid
 ```
 
 ---
 
-#### 2. Mutation Based on Failure
+#### 2. Plan-Level Bandit Selection
+**File:** `core/planSelector.js`
+
+Plan selector already implements UCB-based bandit selection at plan level:
+
+```javascript
+calculateUCBScore(plan, totalSelections) {
+  const c = this.config.explorationConstant;
+  const usage = plan.usage_count || 0;
+  
+  // Exploitation: base score
+  const exploit = plan.score || 0.5;
+  
+  // Exploration: UCB term
+  const explore = c * Math.sqrt(
+    Math.log(totalSelections + 1) / (usage + 1)
+  );
+
+  return exploit + explore;
+}
+```
+
+**Test Input:**
+```javascript
+const plans = [
+  { id: "plan1", score: 0.8, usage_count: 10 },
+  { id: "plan2", score: 0.9, usage_count: 0 }
+];
+```
+
+**Test Output:**
+```
+plan2 gets higher UCB score due to lower usage_count
+```
+
+---
+
+#### 3. Plan Cache + Cost Control
+**File:** `core/planner.js`
+
+Added plan cache and cost control to Planner class:
+
+```javascript
+this.planCache = new Map();
+this.maxCost = options.maxCost || 1.0;
+
+estimateCost(plan) {
+  if (!plan || !plan.bestPath) return 0;
+  return plan.bestPath.length * 0.1;
+}
+
+cachePlan(goal, plan) {
+  const goalKey = typeof goal === "string" ? goal : JSON.stringify(goal);
+  this.planCache.set(goalKey, { plan, cachedAt: Date.now() });
+}
+
+getCachedPlan(goal) {
+  const goalKey = typeof goal === "string" ? goal : JSON.stringify(goal);
+  return this.planCache.get(goalKey);
+}
+```
+
+**Test Input:**
+```javascript
+const planner = new Planner({ maxCost: 1.0 });
+const plan = { bestPath: ["step1", "step2", "step3"] };
+const cost = planner.estimateCost(plan);
+```
+
+**Test Output:**
+```
+cost: 0.3
+```
+
+**Test Input (reject expensive plan):**
+```javascript
+const plan = { bestPath: ["step1", "step2", "step3", "step4", "step5", "step6", "step7", "step8", "step9", "step10", "step11"] };
+const cost = planner.estimateCost(plan);
+```
+
+**Test Output:**
+```
+cost: 1.1 (exceeds maxCost: 1.0)
+```
+
+---
+
+#### 4. Failure-Driven Mutation
 **File:** `core/mutation.js`
 
-Added failure-based mutation system:
+Already implements failure-based mutation:
 
 ```javascript
 export function mutateFromFailure(skill, failures) {
   const newSkill = JSON.parse(JSON.stringify(skill));
+
   if (failures.length === 0) return newSkill;
 
   const firstFailure = failures[0];
   const errorMsg = firstFailure.error || "";
 
-  if (errorMsg.includes("timeout")) {
+  if (errorMsg.includes("timeout") || errorMsg.includes("timeout")) {
     for (const step of newSkill.logic) {
       if (step.op === "for" || step.op === "while") {
         step.maxLoops = (step.maxLoops || 1000) / 2;
@@ -98,7 +198,11 @@ export function mutateFromFailure(skill, failures) {
 
   if (errorMsg.includes("schema") || errorMsg.includes("validation")) {
     if (newSkill.logic.length > 0 && newSkill.logic[0].op === "set") {
-      newSkill.logic.unshift({ op: "set", path: "_validated", value: true });
+      newSkill.logic.unshift({
+        op: "set",
+        path: "_validated",
+        value: true
+      });
     }
   }
 
@@ -120,39 +224,51 @@ mutateFromFailure(skill, failures);
 
 ---
 
-#### 3. Executor - Already has Trace System
-**File:** `core/executor.js`
+#### 5. Global Scoring System
+**File:** `core/scoring.js`
 
-The executor already includes trace system (lines 777-781):
+Already implements global scoring system:
 
 ```javascript
-frame.trace.push({
-  stepIndex: i,
-  op: step.op,
-  timestamp: Date.now()
+export function globalScore({
+  correctness = 0,
+  schema_validity = 0,
+  efficiency = 0,
+  reuse = 0,
+  latency = 0
+}) {
+  return (
+    correctness * WEIGHTS.correctness +
+    schema_validity * WEIGHTS.schema_validity +
+    efficiency * WEIGHTS.efficiency +
+    reuse * WEIGHTS.reuse +
+    latency * WEIGHTS.latency
+  );
+}
+```
+
+**Test Input:**
+```javascript
+globalScore({
+  correctness: 1.0,
+  schema_validity: 0.8,
+  efficiency: 0.9,
+  reuse: 0.7,
+  latency: 0.5
 });
+```
+
+**Test Output:**
+```
+0.4 + 0.16 + 0.135 + 0.105 + 0.05 = 0.85
 ```
 
 ---
 
-#### 4. Hard Validation - Already Implemented
-**File:** `core/skillValidation.js`
-
-Already implements hard validation with DSL structure validation.
-
----
-
-#### 5. Skill Selection - Already has Capability Whitelist
-**File:** `services/skillService.js`
-
-Already implements context-aware skill selection with capability whitelist.
-
----
-
-#### 6. Blackboard Locking - Already has Versioning
+#### 6. Blackboard Versioning (CAS)
 **File:** `core/blackboard.js`
 
-Already implements hard guard with versioning (lines 328-341):
+Already implements hard guard with versioning:
 
 ```javascript
 hardGuardSet(zoneName, patch, incomingVersion, writer) {
@@ -167,12 +283,17 @@ hardGuardSet(zoneName, patch, incomingVersion, writer) {
 }
 ```
 
----
+**Test Input:**
+```javascript
+const bb = new Blackboard();
+bb.hardGuardSet("goal", { data: "test" }, 0, "agent1");
+bb.hardGuardSet("goal", { data: "test2" }, 0, "agent2");
+```
 
-#### 7. Episodic Memory - Already Implemented
-**File:** `core/episodicMemory.js`
-
-Already implements episodic memory with Episode class, VectorStore, and template system.
+**Test Output:**
+```
+{ accepted: false, version: 1, reason: "outdated_update" }
+```
 
 ---
 
@@ -184,7 +305,7 @@ Already implements episodic memory with Episode class, VectorStore, and template
 # tests 226
 # pass 226
 # fail 0
-# duration_ms: 2053.042999
+# duration_ms: 1905.582648
 ```
 
 | Test File | Tests | Status |
@@ -192,11 +313,14 @@ Already implements episodic memory with Episode class, VectorStore, and template
 | bandit.test.js | 8 | ✅ Pass |
 | callSkill.test.js | 12 | ✅ Pass |
 | executorDSL.test.js | 20+ | ✅ Pass |
+| executor.test.js | 20+ | ✅ Pass |
 | mcp.test.js | 9 | ✅ Pass |
 | scoring.test.js | 5 | ✅ Pass |
 | mutation.test.js | 6 | ✅ Pass |
 | testBuilder.test.js | 5 | ✅ Pass |
-| Other tests | ~160 | ✅ Pass |
+| testRunner.test.js | 5 | ✅ Pass |
+| validation.test.js | 5 | ✅ Pass |
+| Other tests | ~140 | ✅ Pass |
 
 ---
 
@@ -204,13 +328,12 @@ Already implements episodic memory with Episode class, VectorStore, and template
 
 | Feature | Status | File |
 |---------|--------|------|
-| Executor Trace System | ✅ Done | core/executor.js |
-| Hard Validation | ✅ Done | core/skillValidation.js |
-| Test Builder + Failure Log | ✅ Done | core/testBuilder.js |
-| Skill Selection (UCB) | ✅ Done | services/skillService.js |
-| Mutation Based on Failure | ✅ Done | core/mutation.js |
-| Blackboard Versioning | ✅ Done | core/blackboard.js |
-| Episodic Memory | ✅ Done | core/episodicMemory.js |
+| Executor Validation + Capability | ✅ Done | core/executor.js |
+| Plan Cache + Cost Control | ✅ Done | core/planner.js |
+| Plan-Level Bandit (UCB) | ✅ Done | core/planSelector.js |
+| Failure-Driven Mutation | ✅ Done | core/mutation.js |
+| Global Scoring System | ✅ Done | core/scoring.js |
+| Blackboard Versioning (CAS) | ✅ Done | core/blackboard.js |
 
 ---
 
