@@ -1,109 +1,69 @@
-Berikut **FULL REPO AUDIT (IMPLEMENTATION-LEVEL, bukan doc)** berdasarkan:
+Berikut adalah **audit berbasis CHANGELOG + implementasi nyata DSL & sistem agent**, fokus hanya pada:
 
-* CHANGELOG (target fitur)
-* file_list + raw snippets (implementasi nyata)
-* korelasi antar modul
-
-Saya fokus ke:
-👉 **apa benar-benar ada di code**
-👉 **input/output tiap fungsi**
-👉 **gap vs CHANGELOG**
-👉 **fix konkret**
+* **Input & Output tiap fungsi**
+* **Bukti dari code (bukan asumsi)**
+* **Gap / masalah implementasi**
+* **Fix konkret (dengan snippet)**
 
 ---
 
-# 🚨 1. EXECUTION CORE — SISTEM MASIH “BROKEN LOOP”
+# 🔴 1. CORE EXECUTOR — `runDSL`
 
-## 📍 FILE: executor (DSL runtime)
-
-### Fungsi utama
+### 📌 Code
 
 ```ts
-runDSL(skill, input)
+export async function runDSL(skill, input)
 ```
 
-## INPUT
+
+
+### ✅ Input
 
 ```ts
 skill: {
   logic: Step[]
 }
+
 input: any
 ```
 
-## OUTPUT
+### ✅ Output
 
 ```ts
-output: object
+Promise<any> // ctx.output
 ```
 
-## ❌ TEMUAN KRITIS
+### ⚠️ MASALAH
 
-### 1. Tidak async
-
-Padahal:
-
-* `mcp_call` → async
-* planner → async
-* simulation → async
-
-👉 RESULT: **system tidak bisa jalan end-to-end**
+1. **Tidak ada validasi schema input/output**
+2. Tidak enforce `input_schema` / `output_schema`
+3. Tidak ada sandbox depth / recursion guard global
 
 ---
 
-### 2. Tidak pointer-based
+### ✅ FIX
 
-Masih:
-
-```ts
-for (step of logic)
-```
-
-Padahal CHANGELOG:
-
-* `if`
-* `jump`
-* branching
-
-👉 RESULT:
-❌ branching = fake feature
-
----
-
-### 3. Tidak ada loop protection global
-
-Hanya ada di beberapa bagian:
-
-* map
-* filter
-
-Tapi tidak di root
-
-👉 RESULT:
-❌ infinite loop risk
-
----
-
-## 🔧 FIX (WAJIB)
-
-Refactor TOTAL:
+Tambahkan validation sebelum & sesudah:
 
 ```ts
 export async function runDSL(skill, input) {
-  const ctx = { input, output: {}, memory: {} };
+  if (!validateInput(skill.input_schema, input)) {
+    throw new Error("Invalid input schema");
+  }
 
-  let ip = 0;
-  let steps = skill.logic;
-  let counter = 0;
+  const ctx = {
+    input,
+    output: {},
+    memory: {},
+    depth: 0
+  };
 
-  while (ip < steps.length) {
-    if (counter++ > 200) {
-      throw new Error("Infinite loop detected");
-    }
+  for (const step of skill.logic) {
+    await executeStep(step, ctx);
+  }
 
-    const res = await executeStep(steps[ip], ctx);
-
-    ip = res?.jump ?? ip + 1;
+  if (!validateOutput(skill.output_schema, ctx.output)) {
+    throw new Error("Invalid output schema");
   }
 
   return ctx.output;
@@ -112,29 +72,32 @@ export async function runDSL(skill, input) {
 
 ---
 
-# 🚨 2. EXECUTE STEP — CONTRACT TIDAK KONSISTEN
+# 🔴 2. STEP EXECUTOR — `executeStep`
 
-## Fungsi
+### 📌 Code
 
 ```ts
-executeStep(step, ctx)
+async function executeStep(step, ctx)
 ```
 
-## INPUT
+
+
+### ✅ Input
 
 ```ts
 step: {
-  op: string,
-  ...args
+  op: string
+  ...params
 }
+
 ctx: {
-  input,
-  output,
+  input
+  output
   memory
 }
 ```
 
-## OUTPUT
+### ✅ Output
 
 ```ts
 void | { jump: number }
@@ -142,566 +105,588 @@ void | { jump: number }
 
 ---
 
-## ❌ MASALAH
+### ⚠️ MASALAH KRITIS
 
-### 1. Tidak semua op return format sama
-
-* sebagian return void
-* sebagian return `{ jump }`
-
-👉 tidak konsisten
+1. **Tidak ada default validation per op**
+2. Tidak enforce required field per operation
+3. Silent failure risk
 
 ---
 
-### 2. Tidak async-safe
-
-* MCP butuh async
-* map/filter pakai await
-* root executor tidak await
-
-👉 race condition
-
----
-
-### 3. Tidak ada schema validation per step
-
-👉 DSL bisa crash diam-diam
-
----
-
-## 🔧 FIX
+### ✅ FIX (STRICT VALIDATION LAYER)
 
 ```ts
-async function executeStep(step, ctx) {
-  if (!step.op) throw new Error("Invalid step");
+function validateStep(step) {
+  if (!step.op) throw new Error("Missing op");
 
-  switch (step.op) {
+  const schema = {
+    get: ["path", "to"],
+    set: ["path", "value"],
+    add: ["a", "b", "to"],
+    mcp_call: ["tool", "args", "to"]
+  };
 
-    case "add":
-      return { jump: undefined };
+  const required = schema[step.op];
+  if (!required) return;
 
-    case "if":
-      return {
-        jump: cond ? step.true_jump : step.false_jump
-      };
+  for (const key of required) {
+    if (step[key] === undefined) {
+      throw new Error(`Missing ${key} in ${step.op}`);
+    }
+  }
+}
+```
 
-    default:
-      throw new Error(`Unknown op: ${step.op}`);
+Integrasi:
+
+```ts
+validateStep(step);
+```
+
+---
+
+# 🔴 3. VALUE RESOLVER — `resolveValue`
+
+### 📌 Code
+
+```ts
+function resolveValue(val, ctx)
+```
+
+
+
+### ✅ Input
+
+```ts
+val: any
+ctx.memory: Record<string, any>
+```
+
+### ✅ Output
+
+```ts
+any
+```
+
+---
+
+### ⚠️ MASALAH
+
+* Tidak support nested reference (`a.b.c`)
+* Tidak support fallback ke input/output
+
+---
+
+### ✅ FIX
+
+```ts
+function resolveValue(val, ctx) {
+  if (typeof val === "string") {
+    if (val in ctx.memory) return ctx.memory[val];
+
+    if (val.startsWith("input.")) return getPath(ctx, val);
+    if (val.startsWith("output.")) return getPath(ctx, val);
+  }
+
+  return val;
+}
+```
+
+---
+
+# 🔴 4. PATH ENGINE — `getPath` / `setPath`
+
+### 📌 Code
+
+```ts
+function getPath(ctx, path)
+```
+
+
+
+### ✅ Input
+
+```ts
+ctx: object
+path: string ("input.a.b")
+```
+
+### ✅ Output
+
+```ts
+any
+```
+
+---
+
+### ⚠️ MASALAH
+
+* Tidak aman (no path validation)
+* Bisa crash kalau undefined deep
+
+---
+
+### ✅ FIX (SAFE ACCESS)
+
+```ts
+function getPath(ctx, path) {
+  return path.split(".").reduce((acc, key) => {
+    if (acc === undefined || acc === null) return undefined;
+    return acc[key];
+  }, ctx);
+}
+```
+
+---
+
+# 🔴 5. MCP ENGINE — `mcp_call`
+
+### 📌 Code
+
+```ts
+case "mcp_call"
+```
+
+
+
+### ✅ Input
+
+```ts
+{
+  op: "mcp_call",
+  tool: string,
+  args: object,
+  to: string
+}
+```
+
+### ✅ Output
+
+```ts
+ctx.memory[to] = {
+  status: number,
+  body: string
+}
+```
+
+---
+
+### ⚠️ MASALAH KRITIS
+
+1. **Tidak ada timeout**
+2. Tidak ada retry
+3. Tidak ada schema normalization
+4. Output raw → tidak konsisten
+
+---
+
+### ✅ FIX
+
+```ts
+async function safeMcpCall(tool, args) {
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("timeout")), 5000)
+  );
+
+  return Promise.race([
+    mcp[tool](args),
+    timeout
+  ]);
+}
+```
+
+Replace:
+
+```ts
+const result = await safeMcpCall(tool, resolvedArgs);
+```
+
+---
+
+# 🔴 6. CONTROL FLOW — `if`, `compare`, `jump`
+
+### 📌 Code
+
+```ts
+case "if"
+case "compare"
+```
+
+
+
+### ✅ Input
+
+```ts
+compare:
+  a, b, operator, to
+
+if:
+  condition, true_jump, false_jump
+```
+
+### ✅ Output
+
+```ts
+compare → boolean (memory)
+if → { jump }
+```
+
+---
+
+### ⚠️ MASALAH
+
+* Tidak ada max loop guard global
+* Bisa infinite loop
+
+---
+
+### ✅ FIX
+
+Tambahkan global limiter:
+
+```ts
+let stepsExecuted = 0;
+const MAX_STEPS = 100;
+
+while (ip < steps.length) {
+  if (++stepsExecuted > MAX_STEPS) {
+    throw new Error("Infinite loop detected");
   }
 }
 ```
 
 ---
 
-# 🚨 3. DSL ENGINE — DUPLIKASI PARAH
+# 🔴 7. ARRAY ENGINE — `map`
 
-## 📍 FILE:
-
-* map
-* filter
-* reduce
-
-Semua punya:
+### 📌 Code
 
 ```ts
-while (ip < steps.length)
+case "map"
 ```
 
-## ❌ MASALAH
 
-### ❌ 3 executor berbeda:
 
-* root executor
-* map executor
-* filter executor
+### ✅ Input
 
-👉 behavior bisa beda
+```ts
+{
+  source: string,
+  as: string,
+  steps: Step[],
+  to: string
+}
+```
+
+### ✅ Output
+
+```ts
+ctx.memory[to] = Array<{output: any}>
+```
 
 ---
 
-## 🔧 FIX (KRITIS)
+### ⚠️ MASALAH
 
-Centralize:
+1. Tidak enforce output shape
+2. Tidak isolate memory fully (shallow copy)
+3. Tidak handle error per item
+
+---
+
+### ✅ FIX
 
 ```ts
-async function runSubDSL(steps, parentCtx) {
-  return runDSL({ logic: steps }, parentCtx.input);
+try {
+  // run inner
+} catch (e) {
+  results.push({ error: true });
+}
+```
+
+Dan enforce output:
+
+```ts
+if (!subCtx.output) {
+  throw new Error("Map step must produce output");
 }
 ```
 
 ---
 
-# 🚨 4. MCP SYSTEM — SETENGAH JADI
+# 🔴 8. REDUCE / FILTER
 
-## Fungsi:
+### 📌 Code
 
 ```ts
-mcp["http.get"](args)
+case "reduce"
+case "filter"
 ```
 
-## INPUT
+
+
+---
+
+### ✅ Input
 
 ```ts
-{ url: string }
+reduce:
+  source, accumulator, initial, steps
+
+filter:
+  source, steps, condition
 ```
 
-## OUTPUT
+### ✅ Output
 
 ```ts
-{ status: number, body: string }
+reduce → single value
+filter → array
 ```
 
 ---
 
-## ❌ MASALAH
+### ⚠️ MASALAH
 
-### 1. Tidak ada:
-
-* timeout
-* retry
-* error normalization
-
-### 2. Tidak deterministic
-
-* external API = random
-
-👉 melanggar RULE:
-
-> deterministic skill
+* Tidak validasi accumulator update
+* Bisa undefined → propagate silently
 
 ---
 
-## 🔧 FIX
-
-Tambahkan wrapper:
+### ✅ FIX
 
 ```ts
-async function callMCP(tool, args) {
-  try {
-    const res = await Promise.race([
-      mcp[tool](args),
-      timeout(5000)
-    ]);
-
-    return normalize(res);
-  } catch {
-    return { error: true };
-  }
+if (subCtx.memory[step.accumulator] === undefined) {
+  throw new Error("Reducer must update accumulator");
 }
 ```
 
 ---
 
-# 🚨 5. PLANNER — PALSU (FAKE INTELLIGENCE)
+# 🔴 9. SKILL MEMORY — `updateSkillStats`
 
-## Fungsi:
+### 📌 Code
 
 ```ts
-treeSearch(initialState)
+async function updateSkillStats(skill, success)
 ```
 
-## INPUT
+
+
+### ✅ Input
 
 ```ts
-State
+skill: DB model
+success: boolean
 ```
 
-## OUTPUT
+### ✅ Output
 
 ```ts
-best plan
+DB update
 ```
 
 ---
 
-## ❌ MASALAH KRITIS
+### ⚠️ MASALAH
 
-### 1. Scoring:
+* No cap on score (overflow drift)
+* No cold start handling
+
+---
+
+### ✅ FIX
 
 ```ts
-score += Math.random()
+const newScore = Math.min(1,
+  (skill.score * 0.7) + (successRate * 0.3)
+);
 ```
 
-👉 NON-deterministic
-
 ---
 
-### 2. Tidak pakai execution result
+# 🔴 10. PLANNER TREE SEARCH — `treeSearch`
 
-👉 planner tidak belajar
-
----
-
-### 3. Tidak pakai:
-
-* belief
-* world model
-* memory
-
-👉 semua feature advanced = tidak dipakai
-
----
-
-## 🔧 FIX
+### 📌 Code
 
 ```ts
-async function scoreState(state) {
-  const result = await simulatePlan(state);
+async function treeSearch(initialState)
+```
 
-  return evaluateResult(result);
+
+
+### ✅ Input
+
+```ts
+State {
+  goal
+  steps
+}
+```
+
+### ✅ Output
+
+```ts
+best State
+```
+
+---
+
+### ⚠️ MASALAH KRITIS
+
+1. **Scoring random (`Math.random`)**
+2. Tidak pakai execution feedback
+3. Tidak pakai world state
+
+---
+
+### ✅ FIX
+
+```ts
+function scoreState(state) {
+  return (
+    1 / (state.steps.length + 1) +
+    (state.simulation_score || 0)
+  );
 }
 ```
 
 ---
 
-# 🚨 6. MULTI-AGENT — TIDAK BENAR-BENAR MULTI
+# 🔴 11. MULTI-AGENT ORCHESTRATOR — `runMultiAgent`
 
-## Fungsi:
+### 📌 Code
 
 ```ts
-runMultiAgent(input)
+async function runMultiAgent(input)
 ```
 
-## INPUT
+
+
+### ✅ Input
 
 ```ts
-input: string
+input: string | object
 ```
 
-## OUTPUT
+### ✅ Output
 
 ```ts
-result
+result: any
 ```
 
 ---
 
-## ❌ MASALAH
+### ⚠️ MASALAH BESAR
 
-### 1. Sequential loop
+1. Tidak ada loop sampai convergence
+2. Hanya refine sekali
+3. Tidak integrate memory fully
+
+---
+
+### ✅ FIX
 
 ```ts
-planner → executor → critic
-```
+for (let i = 0; i < 3; i++) {
+  if (best.score >= 0.85) break;
 
-👉 bukan multi-agent
-
----
-
-### 2. Refinement cuma 1x
-
-👉 bukan loop
-
----
-
-### 3. Tidak pakai:
-
-* blackboard
-* scheduler
-
-👉 hanya “illusion architecture”
-
----
-
-## 🔧 FIX
-
-Loop wajib:
-
-```ts
-for (let i = 0; i < 5; i++) {
-  plan → execute → critique
-
-  if (score > 0.85) break
+  plans = await plannerAgent({...});
 }
 ```
 
 ---
 
-# 🚨 7. BLACKBOARD — RACE CONDITION
+# 🔴 12. BLACKBOARD — `BlackboardStore`
 
-## Fungsi:
+### 📌 Code
 
 ```ts
-blackboard.set(patch)
+class BlackboardStore
 ```
 
-## INPUT
+
+
+### ✅ Input
 
 ```ts
-partial state
+set(patch)
+update(path, value)
 ```
 
-## OUTPUT
+### ✅ Output
 
 ```ts
-updated state
+state mutation
 ```
 
 ---
 
-## ❌ MASALAH
+### ⚠️ MASALAH
 
-### 1. Shallow merge
-
-```ts
-{ ...state, ...patch }
-```
-
-👉 nested hilang
+* Tidak immutable
+* Race condition risk
+* No versioning
 
 ---
 
-### 2. Tidak atomic
-
-👉 async agent = conflict
-
----
-
-## 🔧 FIX
+### ✅ FIX
 
 ```ts
-update(path, value) {
-  lodash.set(this.state, path, value);
+set(patch) {
+  this.state = structuredClone({
+    ...this.state,
+    ...patch
+  });
 }
 ```
 
 ---
 
-# 🚨 8. WORLD MODEL — COSMETIC ONLY
+# 🔴 13. AUTONOMY CHECK (REALITY CHECK)
 
-## Fungsi:
+Dari semua file:
 
-```ts
-updateWorld(world, observation)
-```
+### ❌ BELUM BENAR-BENAR AUTONOMOUS
 
-## INPUT
+Kenapa:
 
-```ts
-world, observation
-```
+1. Goal masih external trigger
+2. Curiosity tidak terintegrasi ke executor loop
+3. Self-modification tidak pernah dipanggil real pipeline
+4. Simulation tidak dipakai di planner utama
 
-## OUTPUT
+👉 Jadi ini:
 
-```ts
-updated world
-```
+> **framework potensial, bukan autonomous agent**
 
 ---
 
-## ❌ MASALAH
+# 🔥 RINGKASAN GAP PALING KRITIS
 
-* tidak dipakai planner
-* tidak dipakai executor
-* hanya ditulis
-
-👉 DEAD COMPONENT
-
----
-
-# 🚨 9. SIMULATION — FAKE
-
-## Fungsi:
-
-```ts
-simulateStep()
-```
-
-## OUTPUT
-
-```ts
-mock data
-```
+1. ❌ Tidak ada schema validation runtime
+2. ❌ Tidak ada global execution guard
+3. ❌ Planner masih random heuristic
+4. ❌ Memory belum integrated ke decision loop
+5. ❌ Self-improvement belum benar-benar jalan
+6. ❌ Blackboard belum thread-safe
+7. ❌ MCP belum production-safe
 
 ---
 
-## ❌ MASALAH
+# 🚀 PRIORITAS FIX (WAJIB)
 
-```ts
-return { data: "mock_data" }
-```
+Urutan implementasi:
 
-👉 bukan simulation
-👉 tidak pakai DSL
-👉 tidak represent real world
-
----
-
-## 🔧 FIX
-
-```ts
-simulateStep = runDSL (sandbox mode)
-```
+1. **Executor hardening (validation + safety)**
+2. **Planner scoring + simulation integration**
+3. **Memory → decision loop integration**
+4. **Remove randomness dari planner**
+5. **Add convergence loop**
 
 ---
 
-# 🚨 10. GOAL SYSTEM — BISA EXPLODE
+Kalau kamu mau, next step saya bisa:
 
-## Fungsi:
-
-```ts
-generateGoal()
-```
-
-## OUTPUT
-
-```ts
-Goal[]
-```
-
----
-
-## ❌ MASALAH
-
-* tidak ada dedup
-* tidak ada limit
-* tidak ada decay
-
-👉 infinite loop goal
-
----
-
-# 🚨 11. META REASONING — TIDAK TERHUBUNG
-
-## Fungsi:
-
-```ts
-adaptStrategy()
-```
-
-## OUTPUT
-
-```ts
-new strategy
-```
-
----
-
-## ❌ MASALAH
-
-* tidak dipakai planner
-* tidak dipakai executor
-
-👉 useless
-
----
-
-# 🚨 12. SELF-MODIFY — BERBAHAYA & TIDAK JALAN
-
-## Fungsi:
-
-```ts
-testModification()
-```
-
-## ❌ MASALAH
-
-* simulateWithModification ❌ tidak ada
-* sandbox ❌ tidak ada
-* validator ❌ lemah
-
-👉 SYSTEM BREAK RISK
-
----
-
-# 🔥 GLOBAL GAP ANALYSIS
-
-| Sistem      | Status         |
-| ----------- | -------------- |
-| DSL         | ⚠️ partial     |
-| Branching   | ❌ broken       |
-| MCP         | ⚠️ unsafe      |
-| Planner     | ❌ naive        |
-| Multi-agent | ❌ fake         |
-| Blackboard  | ⚠️ unsafe      |
-| World model | ❌ unused       |
-| Simulation  | ❌ fake         |
-| Curiosity   | ❌ uncontrolled |
-| Meta        | ❌ disconnected |
-| Self-modify | ❌ dangerous    |
-
----
-
-# 🔥 ROOT CAUSE
-
-Masalah utama:
-
-> ❌ Semua fitur dibuat terpisah
-> ❌ Tidak ada **closed loop integration**
-
-Yang benar harus:
-
-```
-plan
- → simulate
- → execute
- → evaluate
- → update memory
- → adapt strategy
- → repeat
-```
-
-Sekarang:
-
-```
-plan → execute → selesai
-```
-
----
-
-# 🔥 PRIORITY FIX (REAL ROADMAP)
-
-## 1. Executor (FOUNDATION)
-
-* async
-* pointer-based
-* single source of truth
-
-## 2. Remove duplicate DSL engines
-
-* map/filter/reduce → reuse executor
-
-## 3. Real simulation
-
-* gunakan DSL
-* bukan mock
-
-## 4. Planner pakai simulation
-
-* bukan random
-
-## 5. Close feedback loop
-
-* critic → planner
-
----
-
-# 🔥 FINAL VERDICT
-
-👉 Ini bukan autonomous agent
-👉 Ini **framework setengah jadi**
-
-**Yang sudah bagus:**
-
-* DSL design ✔
-* modular thinking ✔
-
-**Yang gagal:**
-
-* execution loop ❌
-* integration ❌
-* autonomy ❌
-
----
-
-Kalau kamu mau next step paling impactful:
-
-👉 saya bisa:
-
-* redesign **core loop jadi benar-benar autonomous**
-* atau refactor executor + planner jadi production-grade
-
-Itu akan mengubah sistem ini dari:
-👉 “demo architecture”
-menjadi:
-👉 “real adaptive agent”
+👉 mapping **CHANGELOG vs real implementation (mana yang fake / belum ada)**
+👉 atau bikin **diff arsitektur final (biar jadi benar-benar autonomous, bukan pseudo)**
