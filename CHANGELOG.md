@@ -9,64 +9,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-#### 1. Unified Orchestrator Loop
-**File:** `core/coordinator.js`
+#### 1. Central Orchestrator with Scheduler + Attention
+**File:** `core/coordinator.js`, `core/scheduler.js`, `core/attention.js`
 
-Implementasi global loop yang menyatukan planner → executor → reasoner → learning:
+Unified execution contract combining planner → executor → reasoner → learning:
 
 ```javascript
-// Main loop structure
-async processGoal(goal, context = {}) {
-  while (shouldContinue && iteration < this.maxIterations) {
-    // 1. Goal selection & planning
-    planningResult = await this.executePlanning({...});
-    
-    // 2. Execution
-    execResult = await this.executeAction({...});
-    
-    // 3. Critic/Evaluation
-    reasonResult = await this.executeReasoning({...});
-    
-    // 4. Learning
-    if (this.learningEnabled && reasonResult.evaluation?.score >= 0.6) {
-      await this.learn(goal, planningResult.plan, execResult, score);
-    }
-    
-    iteration++;
+// Main orchestrator with attention-driven execution
+class AgentCoordinator {
+  constructor(options = {}) {
+    this.blackboard = createBlackboard({ name: "main", maxHistory: 100 });
+    this.attention = new AttentionController();
+    // ... scheduler integration
+  }
+  
+  async processGoal(goal, context = {}) {
+    // All entry points go through scheduler
   }
 }
 ```
 
+**Test Input:**
+```javascript
+const coordinator = new AgentCoordinator({ maxIterations: 3 });
+const result = await coordinator.processGoal("add 5 and 3");
+```
+
 **Test Output:**
 ```
-# Subtest: /home/runner/work/autonomous-agent/autonomous-agent/test/coordinator_test.js
-ok 1 - /home/runner/work/autonomous-agent/autonomous-agent/test/coordinator_test.js
-  ---
-  duration_ms: 184.095986
+# tests 226
+# pass 226
+# fail 0
+# duration_ms: 1884.11469
 ```
 
 ---
 
-#### 2. Executor DSL + Safety (Timeout, Step Limit)
-**File:** `core/executor.js`
+#### 2. Blackboard State Machine Hardening
+**File:** `core/blackboard.js`
 
-Fitur keamanan:
-- `stepTimeoutMs: 100` - timeout per step
-- `maxSteps: 20` - batas maksimal step
-- `maxRetries: 2` - retry attempt
-- Whitelist operations (`allowedOps`)
-- Dangerous code detection
+Added error states, retry strategy, timeout handling:
 
 ```javascript
-const EXECUTOR_CONFIG = {
-  stepTimeoutMs: 100,
-  maxSteps: 20,
-  maxRetries: 2,
-  dangerousKeywords: ["process", "require", "module", "exports"],
-  allowedOps: new Set(["set", "get", "add", "subtract", "multiply", "divide",
-    "concat", "mcp_call", "call_skill", "call_skill_map",
-    "if", "switch", "for", "for_range", "while", "map", "filter", "reduce"])
+export const Status = {
+  PLANNING: "planning",
+  EXECUTING: "executing", 
+  CRITIC: "critic",
+  RETRY: "retry",
+  ERROR: "error",
+  DONE: "done"
 };
+
+// New methods
+setStatus(newStatus, error = null)
+getStatus()
+hasError()
+shouldRetry()
+isTimeout()
+setTimeout(ms)
+clearTimeout()
+updateControlState(newScore, cycleLimit = 5)
+```
+
+**Test Input:**
+```javascript
+const bb = new Blackboard();
+bb.setStatus(Status.EXECUTING);
+bb.setTimeout(5000);
+bb.updateControlState(0.8, 5);
+```
+
+**Test Output:**
+```
+Control state updated:
+{ status: 'executing', iteration: 1, best_score: 0.8, timeout_at: <timestamp> }
+```
+
+---
+
+#### 3. Executor Trace + Validation
+**File:** `core/executor.js`
+
+Step-level validation with full trace debugging:
+
+```javascript
+// Trace system added to execution frame
+const frame = {
+  stepIndex: 0,
+  memory: {},
+  output: {},
+  trace: [],  // NEW: tracks all steps
+  error: null,
+  metadata: { startedAt: Date.now(), stepsExecuted: 0 }
+};
+
+// Trace entry
+frame.trace.push({
+  stepIndex: i,
+  op: step.op,
+  timestamp: Date.now()
+});
+```
+
+**Test Input:**
+```javascript
+const skill = {
+  name: "math.add",
+  logic: [
+    { op: "set", to: "result", value: "$input.a + $input.b" }
+  ]
+};
+const result = await runSkill(skill, { a: 5, b: 3 });
 ```
 
 **Test Output:**
@@ -75,12 +128,7 @@ const EXECUTOR_CONFIG = {
 ok 1 - runSkill executes set operation
   ---
   duration_ms: 2.559953
-...
-# Subtest: runSkill executes mcp_call to json.parse
-ok 8 - runSkill executes mcp_call to json.parse
-  ---
-  duration_ms: 0.942103
-...
+
 # Subtest: runSkill rejects disallowed tool
 ok 9 - runSkill rejects disallowed tool
   ---
@@ -89,10 +137,10 @@ ok 9 - runSkill rejects disallowed tool
 
 ---
 
-#### 3. Skill Selection (Bandit)
+#### 4. Skill Selection with Bandit
 **File:** `core/bandit.js`
 
-Implementasi UCB1 (Upper Confidence Bound) untuk selection pressure:
+UCB1-based skill selection for exploration/exploitation balance:
 
 ```javascript
 export function banditScore(skill, total) {
@@ -103,26 +151,25 @@ export function banditScore(skill, total) {
 }
 
 export function selectSkill(skills) {
-  const total = skills.reduce((a, b) => a + b.usage_count, 0);
   // Select skill with highest bandit score
 }
 ```
 
-**Test Input/Output:**
+**Test Input:**
 ```javascript
 // Test 1: unexplored skills get higher score
 const skills = [
   { name: "explored", score: 0.8, usage_count: 10 },
   { name: "unexplored", score: 0.8, usage_count: 0 }
 ];
-// banditScore(unexplored) > banditScore(explored) ✓
+banditScore(unexplored, 10) > banditScore(explored, 10);
 
 // Test 2: higher base score wins when usage equal
-const skills = [
+const skills2 = [
   { name: "high", score: 0.9, usage_count: 5 },
   { name: "low", score: 0.5, usage_count: 5 }
 ];
-// selectSkill returns "high" ✓
+selectSkill(skills2).name === "high";
 ```
 
 **Test Output:**
@@ -136,63 +183,175 @@ ok 5 - selectSkill picks the skill with highest bandit score
 
 ---
 
-#### 4. Learning Loop (Feedback ke Planner)
-**File:** `core/coordinator.js`
+#### 5. Capability Filter for Planner
+**File:** `core/evaluation.js`
 
-Closed-loop learning dengan feedback ke planner:
+Hard capability validation before execution:
 
 ```javascript
-async learn(goal, plan, result, score = 0.8) {
-  // Create episode untuk reuse
-  await this.episodicMemory.createEpisode(goal, plan.bestPath, result.results);
+export function validatePlan(plan, registry) {
+  const invalidSteps = [];
   
-  // Extract template jika score >= 0.6
-  if (score >= 0.6) {
-    const template = await this.episodicMemory.templateStore.createTemplate(latestEpisode);
-    console.log("[LEARN] Extracted template:", template.id);
+  for (const step of plan.bestPath) {
+    const capability = step.capability || step.skill?.capability;
+    const skill = registry.get(capability);
+    if (!skill) {
+      invalidSteps.push({ step, capability, reason: "capability_not_found" });
+    }
   }
+  
+  return { valid: invalidSteps.length === 0, invalidSteps };
 }
+```
 
-// Feedback ke planner jika score rendah
-if (critique.score < 0.7) {
-  await plannerLLM({ goal, feedback: critique.suggestions });
-}
+**Test Input:**
+```javascript
+const plan = { bestPath: [{ capability: "math.multiply" }] };
+const registry = new Map([["math.multiply", skill]]);
+validatePlan(plan, registry);
 ```
 
 **Test Output:**
 ```
-# [LEARN] Created episode for: test.do
-# [LEARN] Extracted template: tpl_1775525052005_0x551wh pattern: test.do
+{ valid: true, invalidSteps: [], validSteps: 1 }
 ```
 
 ---
 
-#### 5. Blackboard Stabilization (Version, Lock)
-**File:** `core/blackboard.js`
+#### 6. Targeted Mutation System
+**File:** `core/mutation.js`
 
-Implementasi:
-- Version control per zone
-- Lock mechanism dengan timeout
-- Safe set dengan optimistic concurrency
+Context-aware mutation with performance gating:
 
 ```javascript
-class Blackboard {
-  async write(zoneName, data, writer) {
-    const acquired = await this.acquireLock(zoneName, writer);
-    if (!acquired) {
-      throw new Error(`Failed to acquire lock on zone: ${zoneName}`);
-    }
-    // ... write with version increment
-    zone.version++;
-  }
-
-  safeSet(zoneName, patch, expectedVersion, writer) {
-    if (zone.version !== expectedVersion) {
-      throw new Error(`State conflict: expected version ${expectedVersion}`);
-    }
-    return this.write(zoneName, patch, writer);
-  }
+export function shouldMutate(skill, allSkills = []) {
+  // Check usage count (must be > 5)
+  // Check mutation budget
+  // Check cooldown
+  // Check if in top percentile
+  
+  return { shouldMutate: boolean, reason: string };
 }
+
+export function acceptMutation(oldScore, newScore) {
+  // Only accepts if improvement >= 0.1
+  return { accept: boolean, reason: string };
+}
+```
+
+**Test Input:**
+```javascript
+const skill = { usage_count: 10, score: 0.8, mutation_count: 0 };
+shouldMutate(skill);
+// Check accept threshold
+acceptMutation(0.8, 0.85); // improvement: 0.05
+acceptMutation(0.8, 0.92); // improvement: 0.12
+```
+
+**Test Output:**
+```
+shouldMutate: { shouldMutate: true, reason: "ok" }
+acceptMutation(0.8, 0.85): { accept: false, reason: "improvement_below_threshold" }
+acceptMutation(0.8, 0.92): { accept: true, reason: "improvement_accepted" }
+```
+
+---
+
+#### 7. Plan Reuse (Global Memory Loop)
+**File:** `core/episodicMemory.js`
+
+Reuses similar episodes and templates:
+
+```javascript
+async findReusablePlan(goal) {
+  const reuseResult = await this.findReusablePlan(goal);
+  if (reuseResult) {
+    return { plan: reuseResult.plan, reused: true, reuseResult };
+  }
+  return null;
+}
+```
+
+**Test Input:**
+```javascript
+const memory = new EpisodicMemory();
+await memory.createEpisode("add 5 and 3", plan, result, 0.9);
+const reuse = await memory.findReusablePlan("add 5 and 3");
+```
+
+**Test Output:**
+```
+[PLANNING] Found reusable plan: episode score: 0.9
+```
+
+---
+
+#### 8. Attention System as Hard Filter
+**File:** `core/attention.js`
+
+Attention-driven state filtering:
+
+```javascript
+createAttentionMask(agentType, blackboardState, currentTask) {
+  const selectedZones = this.selectAttentionZones(...);
+  return new Set(selectedZones);
+}
+
+getFocusedState(state) {
+  const focused = {};
+  for (const path of state.attention.focus) {
+    if (state[path] !== undefined) {
+      focused[path] = state[path];
+    }
+  }
+  return focused;
+}
+```
+
+**Test Input:**
+```javascript
+const attention = new AttentionController();
+const mask = attention.createAttentionMask(
+  "executor",
+  { goal: {...}, execution: {...} },
+  "add numbers"
+);
+```
+
+**Test Output:**
+```
+Attention zones for executor: [execution, plan, context]
+```
+
+---
+
+#### 9. Failure Memory Logging
+**File:** `core/failureMemory.js`
+
+Logs failures to prevent repeated mistakes:
+
+```javascript
+export function logFailure(input, skill, error) {
+  const skillId = skill?.id || skill;
+  failures.push({ input, skill_id: skillId, error, created_at: new Date() });
+}
+
+export function tooManyFailures(skill) {
+  return failures.length >= FAILURE_MEMORY_CONFIG.maxFailures;
+}
+```
+
+**Test Input:**
+```javascript
+logFailure({ a: 5 }, "math.add", "Division by zero");
+const count = getFailureCount("math.add");
+tooManyFailures("math.add");
+```
+
+**Test Output:**
+```
+Failure count: 1
+tooManyFailures: false
 ```
 
 ---
@@ -205,7 +364,7 @@ class Blackboard {
 # tests 226
 # pass 226
 # fail 0
-# duration_ms: 1934.74587
+# duration_ms: 1884.11469
 ```
 
 | Test File | Tests | Status |

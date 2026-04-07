@@ -1,3 +1,12 @@
+export const Status = {
+  PLANNING: "planning",
+  EXECUTING: "executing",
+  CRITIC: "critic",
+  RETRY: "retry",
+  ERROR: "error",
+  DONE: "done"
+};
+
 export class Blackboard {
   constructor(options = {}) {
     this.name = options.name || "main";
@@ -81,7 +90,10 @@ export class Blackboard {
         last_improvement: 0,
         stagnation_count: 0,
         best_score: 0,
-        status: "running"
+        status: Status.PLANNING,
+        error: null,
+        retry_count: 0,
+        timeout_at: null
       },
       version: 0,
       locked: false,
@@ -90,7 +102,63 @@ export class Blackboard {
     });
   }
 
-  updateControlState(newScore) {
+  setStatus(newStatus, error = null) {
+    const control = this.zones.get("control");
+    if (!control) return null;
+    
+    const validStatuses = Object.values(Status);
+    if (!validStatuses.includes(newStatus)) {
+      throw new Error(`Invalid status: ${newStatus}`);
+    }
+    
+    control.data.status = newStatus;
+    control.data.error = error;
+    control.data.retry_count = newStatus === Status.RETRY ? control.data.retry_count + 1 : 0;
+    control.version++;
+    
+    return control.data;
+  }
+
+  getStatus() {
+    const control = this.zones.get("control");
+    return control ? control.data.status : null;
+  }
+
+  hasError() {
+    return this.getStatus() === Status.ERROR;
+  }
+
+  shouldRetry() {
+    const control = this.zones.get("control");
+    if (!control) return false;
+    return control.data.status === Status.RETRY && control.data.retry_count < 3;
+  }
+
+  isTimeout() {
+    const control = this.zones.get("control");
+    if (!control) return false;
+    if (control.data.timeout_at && Date.now() > control.data.timeout_at) {
+      this.setStatus(Status.ERROR, "timeout");
+      return true;
+    }
+    return false;
+  }
+
+  setTimeout(ms) {
+    const control = this.zones.get("control");
+    if (!control) return;
+    control.data.timeout_at = Date.now() + ms;
+    control.version++;
+  }
+
+  clearTimeout() {
+    const control = this.zones.get("control");
+    if (!control) return;
+    control.data.timeout_at = null;
+    control.version++;
+  }
+
+  updateControlState(newScore, cycleLimit = 5) {
     const control = this.zones.get("control");
     if (!control) return null;
     
@@ -104,8 +172,11 @@ export class Blackboard {
       control.data.stagnation_count++;
     }
     
-    if (control.data.stagnation_count > 3) {
-      control.data.status = "done";
+    if (control.data.iteration > cycleLimit) {
+      control.data.status = Status.ERROR;
+      control.data.error = "cycle_limit_exceeded";
+    } else if (control.data.stagnation_count > 3) {
+      control.data.status = Status.DONE;
     }
     
     control.version++;
@@ -115,7 +186,7 @@ export class Blackboard {
 
   getControlState() {
     const control = this.zones.get("control");
-    return control ? control.data : null;
+    return control ? { ...control.data } : null;
   }
 
   resetControlState() {
