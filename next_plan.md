@@ -1,895 +1,536 @@
-Saya sudah baca struktur arsitektur + dokumen yang kamu upload. Saya tidak akan kasih pujian—ini sudah **cukup advance**, tapi masih banyak gap yang bikin sistem kamu **belum bisa benar-benar “self-improving agent”**.
+Saya sudah baca file yang kamu upload (arsitektur DSL, planner, memory, mutation, dll). Secara garis besar: **arah kamu sudah benar**, tapi implementasi kamu masih banyak gap kritis yang bikin sistem ini *belum benar-benar autonomous*, cuma “simulasi agent”.
 
-Di bawah ini saya breakdown **kritik tajam + perbaikan konkret (dengan kode asal → kode perbaikan)** + **contoh input/output nyata**.
-
----
-
-# 🔥 1. MASALAH PALING KRITIS (FOUNDATIONAL FAILURE)
-
-## ❌ 1. Tidak ada integrasi utuh antar modul
-
-Kamu punya:
-
-* skill memory
-* bandit
-* mutation
-* planner
-* blackboard
-
-TAPI:
-👉 mereka masih **modul terpisah, bukan satu loop tertutup**
-
-### Dampak:
-
-* learning tidak konsisten
-* skill tidak benar-benar evolve
-* planner tidak belajar dari execution
+Saya akan langsung kritik keras + kasih perbaikan **berbasis kode konkret + input/output**.
 
 ---
 
-## ✅ FIX: SATUKAN KE SINGLE LEARNING LOOP
+# 🔥 1. MASALAH PALING FATAL (EXECUTOR DSL)
 
-Gabungkan semua jadi pipeline nyata:
+## ❌ Problem
+
+Executor kamu belum cukup strict dan belum fully deterministic.
+
+Dari desain DSL kamu (mcp_call, map, branching, dll) 
+→ **risk besar: state leak + inconsistent output**
+
+### Masalah spesifik:
+
+* Tidak ada **step-level validation**
+* Tidak ada **type enforcement antar step**
+* `ctx.memory` bisa jadi sampah
+
+---
+
+## ✅ Fix (WAJIB)
+
+Tambahkan validator per step:
 
 ```ts
-async function runAgent(input) {
-  // 1. vector search
-  const candidates = await searchSkills(input);
-
-  // 2. bandit selection
-  const skill = selectSkillWithBandit(candidates);
-
-  // 3. execute
-  const result = await runDSL(skill.json, input);
-
-  // 4. validate
-  const validation = validate(skill.output_schema, result);
-
-  // 5. reinforcement
-  await updateSkillStats(skill, validation.valid);
-
-  // 6. exploration (mutation)
-  if (shouldExplore()) {
-    await exploreSkill(skill);
+function validateStepOutput(step, result) {
+  if (result === undefined) {
+    throw new Error(`Step ${step.op} returned undefined`);
   }
 
-  return result;
-}
-```
-
-👉 ini menggabungkan:
-
-* bandit
-* executor
-* evaluator
-* mutation
-
----
-
-# ⚠️ 2. SKILL MUTATION ANDA MASIH “TOY LEVEL”
-
-Dari file kamu: 
-
-```ts
-if (step.op === "add") {
-  step.op = Math.random() > 0.5 ? "add" : "subtract";
-}
-```
-
-## ❌ masalah:
-
-* mutation random → noise
-* tidak guided oleh failure
-* tidak aware context
-
----
-
-## ✅ FIX: FAILURE-DRIVEN MUTATION
-
-```ts
-function mutateSkill(skill, feedback) {
-  const newSkill = structuredClone(skill);
-
-  for (const issue of feedback.issues) {
-    if (issue.includes("missing step")) {
-      newSkill.logic.push({
-        op: "transform",
-        from: "input",
-        to: "normalized"
-      });
-    }
-
-    if (issue.includes("wrong operator")) {
-      const step = newSkill.logic.find(s => s.op === "compare");
-      if (step) step.operator = ">";
-    }
+  if (typeof result === "object" && result === null) {
+    throw new Error(`Step ${step.op} returned null object`);
   }
-
-  return newSkill;
 }
 ```
 
-👉 mutation sekarang:
-
-* berbasis critic
-* bukan random chaos
-
----
-
-# ⚠️ 3. EXECUTOR MASIH BERBAHAYA
-
-Kamu pakai `vm`:
-
-```ts
-const script = new vm.Script(skill.logic);
-```
-
-## ❌ masalah:
-
-* tetap bisa escape
-* tidak deterministic
-* tidak audit-friendly
-
----
-
-## ✅ FIX: DSL ONLY EXECUTION (WAJIB)
-
-Gunakan interpreter seperti ini:
+Integrasi ke executor:
 
 ```ts
 async function executeStep(step, ctx) {
+  let result;
+
   switch (step.op) {
     case "add":
-      ctx.memory[step.to] =
-        ctx.memory[step.a] + ctx.memory[step.b];
-      break;
-
-    case "get":
-      ctx.memory[step.to] =
-        getPath(ctx.memory, step.path);
+      result = resolve(step.a, ctx) + resolve(step.b, ctx);
       break;
 
     case "mcp_call":
-      const result = await mcp[step.tool](step.args);
-      ctx.memory[step.to] = result;
+      result = await mcp[step.tool](resolveObject(step.args, ctx));
       break;
   }
-}
-```
 
-👉 ini:
+  validateStepOutput(step, result);
 
-* deterministic
-* bisa di-log
-* aman
-
----
-
-# ⚠️ 4. PLANNER BELUM TERHUBUNG KE SKILL EVOLUTION
-
-Dari hierarchical planner: 
-
-Planner hanya:
-
-* generate plan
-* execute
-
-## ❌ masalah:
-
-👉 planner tidak belajar dari hasil
-
----
-
-## ✅ FIX: FEEDBACK LOOP KE PLANNER
-
-```ts
-const critique = await critic(plan, result);
-
-await saveEpisode({
-  goal,
-  plan,
-  result,
-  score: critique.score
-});
-
-plannerContext.feedback = critique.suggestions;
-```
-
----
-
-# ⚠️ 5. BLACKBOARD ADA, TAPI BELUM “CONTROL SYSTEM”
-
-Dari file: 
-
-Masalah:
-
-* hanya event-driven
-* belum ada **global control loop**
-
----
-
-## ✅ FIX: SCHEDULER WAJIB JADI ORCHESTRATOR
-
-```ts
-while (cycle < MAX) {
-  const next = selectAgent(blackboard);
-
-  await next.run(blackboard);
-
-  if (blackboard.status === "done") break;
-}
-```
-
-👉 tanpa ini:
-
-* agent kamu cuma reactive, bukan cognitive
-
----
-
-# ⚠️ 6. SKILL MEMORY SUDAH BAGUS, TAPI BELUM “COMPETITION SYSTEM”
-
-Dari: 
-
-Kamu punya:
-
-* score
-* decay
-* version
-
-## ❌ tapi:
-
-👉 tidak ada “kompetisi antar skill”
-
----
-
-## ✅ FIX: TOURNAMENT SELECTION
-
-```ts
-async function selectBestSkill(skills) {
-  const sample = randomPick(skills, 3);
-
-  return sample.sort((a, b) => b.score - a.score)[0];
-}
-```
-
-👉 ini:
-
-* menghindari stagnasi
-* lebih stabil dari global max
-
----
-
-# ⚠️ 7. GOAL SYSTEM SUDAH ADA, TAPI BELUM TERKONTROL
-
-Dari: 
-
-Masalah:
-
-* goal bisa explode
-* tidak ada reward linkage
-
----
-
-## ✅ FIX: GOAL → REWARD LINK
-
-```ts
-function rewardGoal(goal, result) {
-  if (result.success) {
-    goal.priority += 0.2;
-  } else {
-    goal.priority -= 0.3;
-  }
+  ctx.memory[step.to] = result;
 }
 ```
 
 ---
 
-# ⚠️ 8. CODE GENERATION (PALING BERBAHAYA)
+## 📌 Contoh
 
-Dari: 
-
-Masalah:
-
-* sandbox masih lemah
-* belum ada differential testing
-
----
-
-## ✅ FIX: DSL vs CODE VALIDATION
-
-```ts
-const dslResult = await runDSL(skill, input);
-const codeResult = await runInSandbox(mod, input);
-
-if (!deepEqual(dslResult, codeResult)) {
-  rejectModule();
-}
-```
-
----
-
-# 🧪 9. CONTOH FLOW NYATA (END-TO-END)
-
-## INPUT
-
-```json
-{
-  "task": "ambil user dari API lalu ambil nama"
-}
-```
-
----
-
-## SYSTEM FLOW
-
-### 1. planner
-
-```json
-{
-  "plan": {
-    "steps": [
-      { "capability": "api.fetch_user" },
-      { "capability": "object.get_name" }
-    ]
-  }
-}
-```
-
----
-
-### 2. execution
-
-```json
-{
-  "result": {
-    "name": "Leanne Graham"
-  }
-}
-```
-
----
-
-### 3. critic
-
-```json
-{
-  "score": 0.78,
-  "issues": ["missing error handling"]
-}
-```
-
----
-
-### 4. mutation
+### Input DSL
 
 ```json
 {
   "logic": [
-    { "op": "mcp_call", "tool": "http.get" },
-    { "op": "if", "condition": "status == 200" },
-    { "op": "parse_json" }
+    { "op": "add", "a": 1, "b": 2, "to": "x" },
+    { "op": "add", "a": "x", "b": 3, "to": "y" }
   ]
 }
 ```
 
----
-
-### 5. improved result
+### Output
 
 ```json
 {
-  "score": 0.91
+  "y": 6
 }
 ```
 
-👉 baru disimpan
-
 ---
 
-# 🚨 10. REALITY CHECK (INI YANG HARUS KAMU PAHAMI)
+# 🔥 2. CAPABILITY MATCHING MASIH BODOH
 
-Sistem kamu sekarang:
+## ❌ Problem
 
-✅ sudah:
-
-* multi-agent
-* adaptive
-* evolutionary
-
-❌ belum:
-
-* reasoning engine sejati
-* stable learning loop
-* controlled exploration
-
----
-
-# 🎯 PRIORITAS PERBAIKAN (JANGAN NGACO URUTANNYA)
-
-Kalau kamu loncat-loncat → sistem kamu hancur.
-
-## PRIORITY 1 (WAJIB)
-
-* unified learning loop
-* DSL executor aman
-
-## PRIORITY 2
-
-* feedback-driven mutation
-* bandit selection fix
-
-## PRIORITY 3
-
-* planner ↔ critic loop integration
-
-## PRIORITY 4
-
-* blackboard scheduler control
-
----
-
-# 🚀 NEXT STEP (KRITIS BANGET)
-
-Kalau kamu serius:
-
-👉 bilang:
-**“audit executor + DSL engine saya”**
-
-karena:
-
-> 80% kegagalan agent system = executor salah, bukan planner.
-Saya fokus langsung ke inti: **executor + DSL engine kamu adalah titik paling rawan gagal**. Kalau ini salah, semua layer (planner, mutation, bandit, dll) jadi tidak berguna.
-
-Saya breakdown jadi:
-
-1. **Masalah kritis (yang hampir pasti ada di implementasi kamu)**
-2. **Perbaikan konkret (dengan kode pengganti)**
-3. **Desain DSL yang benar**
-4. **Contoh input → trace → output (biar bisa kamu test)**
-
----
-
-# 🚨 1. MASALAH KRUSIAL EXECUTOR KAMU
-
-Berdasarkan desain di file kamu (terutama `mcp_call` + DSL execution) 
-
-## ❌ A. Tidak ada execution isolation per step
-
-Biasanya kamu lakukan:
+Sekarang kamu pakai:
 
 ```ts
-for (const step of skill.logic) {
-  await executeStep(step, ctx);
+where: { capability: normalizeCapability(capability) }
+```
+
+Ini fatal.
+
+→ agent bakal:
+
+* duplikasi skill
+* tidak generalize
+* tidak reuse
+
+---
+
+## ✅ Fix: HYBRID MATCHING
+
+Gabungkan:
+
+1. exact match
+2. embedding similarity
+3. score ranking
+
+```ts
+async function findBestSkill(input) {
+  const embedding = await embed(input);
+
+  const candidates = await vectorSearch(embedding);
+
+  return candidates
+    .map(s => ({
+      skill: s,
+      score:
+        (s.similarity * 0.6) +
+        (s.score * 0.3) +
+        (freshness(s) * 0.1)
+    }))
+    .sort((a, b) => b.score - a.score)[0]?.skill;
 }
 ```
 
-Masalah:
-
-* satu step gagal → seluruh pipeline corrupt
-* tidak ada trace
-* tidak bisa debug
-
 ---
 
-## ❌ B. Memory tidak terstruktur
+## 📌 Contoh
 
-```ts
-ctx.memory[step.to] = result;
+### Input
+
+```
+ambil user dari API
 ```
 
-Masalah:
+### Skill di DB
 
-* overwrite silent
-* tidak ada schema
-* sulit audit
+* `api.fetch_user`
+* `http.get_json`
 
----
+### Output
 
-## ❌ C. Tidak ada VALIDASI PER STEP
-
-Kamu hanya validate di akhir:
-
-```ts
-validate(output_schema, result)
+```
+api.fetch_user (score: 0.82)
 ```
 
-Masalah:
-👉 error terjadi jauh sebelumnya, tapi tidak terdeteksi
+---
+
+# 🔥 3. SELF-IMPROVEMENT LOOP BELUM VALID
+
+Kamu sudah punya scoring + reinforcement 
+Tapi masih **fake learning**
 
 ---
 
-## ❌ D. Tidak ada TYPE SAFETY
+## ❌ Problem
 
-DSL kamu implicit:
+Evaluator kamu:
+
+```ts
+if (result !== undefined) score += 0.4;
+```
+
+Ini sampah.
+
+---
+
+## ✅ Fix: STRUCTURAL VALIDATION + ASSERTION
+
+```ts
+function evaluate(result, schema, expected) {
+  let score = 0;
+
+  if (validate(schema, result).valid) score += 0.3;
+
+  if (deepEqual(result, expected)) score += 0.5;
+
+  if (Object.keys(result).length > 0) score += 0.2;
+
+  return score;
+}
+```
+
+---
+
+## 📌 Contoh
+
+### Test case
 
 ```json
-{ "op": "add", "a": "x", "b": "y" }
+input: { a: 2, b: 3 }
+expected: { result: 5 }
 ```
 
-Masalah:
+### Output salah
 
-* x bisa undefined
-* b bisa string
-* hasil unpredictable
+```json
+{ result: 6 }
+```
 
----
+### Score
 
-## ❌ E. Tidak ada TIMEOUT / CONTROL
-
-Kalau MCP lambat:
-👉 seluruh agent hang
-
----
-
-# ✅ 2. EXECUTOR YANG BENAR (PRODUCTION READY)
-
-Saya kasih versi yang **sudah hardened**.
+```
+0.3 (schema valid) + 0 + 0.2 = 0.5 ❌ reject
+```
 
 ---
 
-## 🔧 CORE EXECUTOR
+# 🔥 4. MUTATION SYSTEM BERBAHAYA
+
+Dari file mutation kamu 
+→ ini bisa bikin **system collapse**
+
+---
+
+## ❌ Problem
+
+Mutation random tanpa constraint:
 
 ```ts
-async function runDSL(skill, input) {
-  const ctx = {
-    input,
-    memory: {},
-    output: {},
-    trace: []
+step.op = random(...)
+```
+
+---
+
+## ✅ Fix: CONTROLLED MUTATION
+
+Tambahkan rule:
+
+```ts
+function mutateSkillSafe(skill) {
+  const clone = deepClone(skill);
+
+  const idx = pickWeakStep(clone);
+
+  if (!idx) return null;
+
+  clone.logic[idx] = improveStep(clone.logic[idx]);
+
+  return clone;
+}
+```
+
+---
+
+## 📌 Contoh
+
+### Before
+
+```json
+{ "op": "add", "a": 1, "b": 2 }
+```
+
+### After
+
+```json
+{ "op": "add", "a": 1, "b": 2, "validate": true }
+```
+
+👉 bukan random, tapi improvement
+
+---
+
+# 🔥 5. BLACKBOARD SYSTEM BELUM AMAN
+
+Dari desain kamu
+
+---
+
+## ❌ Problem
+
+* race condition
+* overwrite state
+* tidak ada versioning
+
+---
+
+## ✅ Fix: VERSIONED STATE
+
+```ts
+set(patch) {
+  this.state = {
+    ...this.state,
+    ...patch,
+    _version: (this.state._version || 0) + 1
   };
+}
+```
 
-  for (let i = 0; i < skill.logic.length; i++) {
-    const step = skill.logic[i];
+---
 
-    try {
-      const start = Date.now();
+## 📌 Contoh
 
-      const result = await executeStep(step, ctx);
+### Before
 
-      ctx.trace.push({
-        step: i,
-        op: step.op,
-        success: true,
-        duration: Date.now() - start
-      });
+```
+state.plan = A
+state.plan = B (overwrite)
+```
 
-    } catch (err) {
-      ctx.trace.push({
-        step: i,
-        op: step.op,
-        success: false,
-        error: err.message
-      });
+### After
 
-      throw new Error(`Step ${i} failed: ${err.message}`);
-    }
-  }
+```
+version 1 → A
+version 2 → B
+```
 
+---
+
+# 🔥 6. HIERARCHICAL PLANNER BELUM NYAMBUNG KE EXECUTOR
+
+Dari design kamu 
+
+---
+
+## ❌ Problem
+
+Micro planner output:
+
+```json
+{ "steps": [...] }
+```
+
+Executor butuh:
+
+```json
+{ "logic": [...] }
+```
+
+Mismatch.
+
+---
+
+## ✅ Fix: TRANSLATION LAYER
+
+```ts
+function planToDSL(plan) {
   return {
-    output: ctx.output,
-    trace: ctx.trace
+    logic: plan.steps.map(s => ({
+      op: "call_skill",
+      skill: s.capability,
+      input: s.input
+    }))
   };
 }
 ```
 
 ---
 
-# 🔒 3. STEP EXECUTION (STRICT MODE)
+## 📌 Contoh
 
-```ts
-async function executeStep(step, ctx) {
-  validateStep(step); // WAJIB
+### Input
 
-  switch (step.op) {
-
-    case "get":
-      return opGet(step, ctx);
-
-    case "set":
-      return opSet(step, ctx);
-
-    case "add":
-      return opAdd(step, ctx);
-
-    case "mcp_call":
-      return await opMCP(step, ctx);
-
-    default:
-      throw new Error(`Unknown op: ${step.op}`);
-  }
-}
+```json
+{ "capability": "array.sum" }
 ```
 
----
-
-# 🔍 4. VALIDATOR STEP (INI YANG KAMU BELUM PUNYA)
-
-```ts
-function validateStep(step) {
-  if (!step.op) throw new Error("Missing op");
-
-  const schema = {
-    get: ["path", "to"],
-    set: ["path", "value"],
-    add: ["a", "b", "to"],
-    mcp_call: ["tool", "args", "to"]
-  };
-
-  const required = schema[step.op];
-
-  if (!required) throw new Error("Invalid op");
-
-  for (const field of required) {
-    if (!(field in step)) {
-      throw new Error(`Missing field: ${field}`);
-    }
-  }
-}
-```
-
----
-
-# 🧠 5. MEMORY RESOLUTION (FIX BESAR)
-
-Masalah besar kamu: resolve masih dangkal.
-
----
-
-## ❌ versi lama
-
-```ts
-if (ctx.memory[val]) ...
-```
-
----
-
-## ✅ versi benar (deep resolve)
-
-```ts
-function resolveValue(val, ctx) {
-  if (typeof val !== "string") return val;
-
-  if (val.startsWith("input.")) {
-    return getPath(ctx.input, val.replace("input.", ""));
-  }
-
-  if (val.startsWith("memory.")) {
-    return getPath(ctx.memory, val.replace("memory.", ""));
-  }
-
-  return val;
-}
-```
-
----
-
-# 🔧 6. IMPLEMENTASI OPERATOR (HARUS STRICT)
-
----
-
-## ➤ ADD
-
-```ts
-function opAdd(step, ctx) {
-  const a = resolveValue(step.a, ctx);
-  const b = resolveValue(step.b, ctx);
-
-  if (typeof a !== "number" || typeof b !== "number") {
-    throw new Error("ADD requires numbers");
-  }
-
-  ctx.memory[step.to] = a + b;
-}
-```
-
----
-
-## ➤ GET
-
-```ts
-function opGet(step, ctx) {
-  const value = getPath(ctx.memory, step.path);
-
-  if (value === undefined) {
-    throw new Error(`Path not found: ${step.path}`);
-  }
-
-  ctx.memory[step.to] = value;
-}
-```
-
----
-
-## ➤ MCP CALL (SAFE VERSION)
-
-```ts
-async function opMCP(step, ctx) {
-  if (!ALLOWED_TOOLS.includes(step.tool)) {
-    throw new Error("Tool not allowed");
-  }
-
-  const args = resolveObject(step.args, ctx);
-
-  const result = await withTimeout(
-    mcp[step.tool](args),
-    3000
-  );
-
-  ctx.memory[step.to] = normalize(result);
-}
-```
-
----
-
-# ⏱️ 7. TIMEOUT WRAPPER (WAJIB)
-
-```ts
-function withTimeout(promise, ms) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Timeout")), ms)
-    )
-  ]);
-}
-```
-
----
-
-# 🧱 8. DSL FORMAT YANG BENAR (KAMU HARUS PERBAIKI)
-
-## ❌ sekarang terlalu bebas
-
-## ✅ harus jadi strict seperti ini:
+### Output DSL
 
 ```json
 {
-  "logic": [
-    {
-      "op": "mcp_call",
-      "tool": "http.get",
-      "args": {
-        "url": "https://api.example.com/user"
-      },
-      "to": "memory.raw"
-    },
-    {
-      "op": "get",
-      "path": "memory.raw.body",
-      "to": "memory.text"
-    },
-    {
-      "op": "set",
-      "path": "output.user",
-      "value": "memory.text"
-    }
-  ]
-}
-```
-
-👉 perbaikan penting:
-
-* semua akses pakai prefix (`memory.` / `input.` / `output.`)
-* tidak ada implicit variable
-
----
-
-# 🧪 9. CONTOH TEST NYATA
-
-## INPUT
-
-```json
-{
-  "input": {
-    "a": 10,
-    "b": 5
-  }
+  "op": "call_skill",
+  "skill": "array.sum"
 }
 ```
 
 ---
 
-## SKILL
+# 🔥 7. MISSING: FAILURE MEMORY (INI KRITIS)
 
-```json
-{
-  "logic": [
-    {
-      "op": "add",
-      "a": "input.a",
-      "b": "input.b",
-      "to": "memory.sum"
-    },
-    {
-      "op": "set",
-      "path": "output.result",
-      "value": "memory.sum"
-    }
-  ]
+Kamu punya episodic memory, tapi belum dipakai untuk failure.
+
+---
+
+## ✅ Fix
+
+```ts
+if (!success) {
+  await saveEpisode({
+    input,
+    skill: skill.id,
+    error: result,
+    type: "failure"
+  });
 }
 ```
 
 ---
 
-## OUTPUT
+## 📌 Dampak
 
-```json
-{
-  "output": {
-    "result": 15
-  },
-  "trace": [
-    { "step": 0, "op": "add", "success": true },
-    { "step": 1, "op": "set", "success": true }
-  ]
+Tanpa ini:
+→ agent ulang kesalahan terus
+
+Dengan ini:
+→ agent belajar avoidance
+
+---
+
+# 🔥 8. MISSING: COST CONTROL (AKAN BUNUH SYSTEM)
+
+Kamu punya:
+
+* mutation
+* planner loop
+* mcp_call
+
+👉 ini bisa explode CPU
+
+---
+
+## ✅ Fix
+
+```ts
+MAX_STEPS = 10
+MAX_COST = 100
+MAX_MCP_CALL = 3
+```
+
+---
+
+# 🔥 9. MISSING: DETERMINISM CHECK
+
+Ini penting banget.
+
+---
+
+## ✅ Fix
+
+```ts
+async function isDeterministic(skill, input) {
+  const r1 = await runDSL(skill, input);
+  const r2 = await runDSL(skill, input);
+
+  return deepEqual(r1, r2);
 }
 ```
 
 ---
 
-# 💣 10. EDGE CASE TEST (WAJIB ADA)
+# 📌 Contoh
 
-## ❌ input salah
+Kalau:
 
-```json
-{
-  "a": "10",
-  "b": 5
-}
+```
+r1 = 5
+r2 = 7
 ```
 
-## RESULT
+→ skill harus dibuang
 
-```json
-{
-  "error": "ADD requires numbers"
-}
+---
+
+# 🔥 10. PIPELINE FINAL (VERSI BENAR)
+
+Gabungan semua fix:
+
+```ts
+1. embed input
+2. vector search
+3. bandit select
+4. execute DSL
+5. validate output
+6. evaluate vs expected
+7. update skill stats
+8. log failure memory
+
+9. if explore:
+    mutate (safe)
+    test
+    deterministic check
+    promote if better
+
+10. decay + prune
+11. cost control
 ```
 
-👉 ini penting buat evaluator
+---
+
+# 🧠 REALITY CHECK
+
+Sekarang kondisi project kamu:
+
+| Layer      | Status           |
+| ---------- | ---------------- |
+| DSL Engine | ⚠️ belum aman    |
+| Planner    | ✅ sudah bagus    |
+| Memory     | ⚠️ belum optimal |
+| Learning   | ❌ masih semu     |
+| Mutation   | ⚠️ berbahaya     |
+| Blackboard | ⚠️ raw           |
 
 ---
 
-# 🔥 11. MASALAH PALING DALAM (YANG ORANG GA SADAR)
+# 🚀 PRIORITAS PERBAIKAN (URUTAN WAJIB)
 
-Kalau DSL kamu:
+Jangan lompat.
 
-* tidak strict
-* tidak deterministic
-* tidak traceable
-
-👉 maka:
-
-> learning system kamu = ILUSI
-
-karena:
-
-* tidak tahu kenapa gagal
-* tidak bisa improve
+1. **Executor + validator (hardening)**
+2. **Evaluator real (bukan dummy)**
+3. **Capability matching (embedding + score)**
+4. **Failure memory**
+5. **Mutation control**
+6. **Cost control**
 
 ---
 
-# ✅ 12. CHECKLIST (HARUS LULUS SEMUA)
+# 🎯 PENUTUP
 
-Kalau executor kamu belum punya ini → belum siap:
+Kalau kamu lanjut tanpa memperbaiki ini:
 
-* [ ] step validation
-* [ ] typed operator
-* [ ] deep memory resolve
-* [ ] trace logging
-* [ ] timeout control
-* [ ] strict DSL schema
-* [ ] safe MCP wrapper
+→ sistem kamu akan:
+
+* makin kompleks
+* makin tidak stabil
+* bukan makin pintar
+
+Kalau kamu perbaiki ini:
+
+→ sistem kamu mulai jadi:
+**self-optimizing execution engine (bukan sekadar agent demo)**
 
 ---
 
-# 🎯 NEXT STEP (SANGAT KRITIS)
+Kalau mau lanjut, pilih satu:
 
-Kalau kamu mau sistem kamu naik level:
-
-👉 bilang:
-**“audit planner + capability matching saya”**
-
-karena setelah executor:
-
-> bottleneck berikutnya = planner salah pilih skill
+👉 “audit DSL engine lebih dalam (step-by-step interpreter redesign)”
+👉 “buat evaluator + test generator yang beneran pintar”
+👉 “refactor planner → executor bridge (biar nyambung penuh)”
