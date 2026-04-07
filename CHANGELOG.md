@@ -2,7 +2,7 @@
 
 ## Test Results - 2026-04-07
 
-All **226 tests passed** (duration: ~1918ms)
+All **226 tests passed** (duration: ~2054ms)
 
 ---
 
@@ -272,7 +272,7 @@ All **226 tests passed** (duration: ~1918ms)
 | SkillSearch hasSkill returns correct boolean | id | true/false | PASS |
 | SkillSearch removeSkill removes from index | id | removed | PASS |
 | SkillSearch count returns total indexed skills | - | count number | PASS |
-| SkillSearch clear removes all skills | - | empty index | PASS |
+| SkillSearch clear removes all | - | empty | PASS |
 | SkillSearch listAll returns all skills | - | all skills | PASS |
 | SkillSearch with no matches returns empty array | no match query | [] | PASS |
 | SkillSearch handles duplicate id updates | duplicate id | updated | PASS |
@@ -395,6 +395,6 @@ All **226 tests passed** (duration: ~1918ms)
 | Total Tests | 226 |
 | Passed | 226 |
 | Failed | 0 |
-| Duration | ~1918ms |
+| Duration | ~2054ms |
 
 **All tests passed!** ✅
