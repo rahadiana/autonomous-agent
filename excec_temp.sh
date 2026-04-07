@@ -1,2 +1,2 @@
 #opencode run "console.log('jalankan curl -s https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/refs/heads/dev/docs/guide/installation.md , install semua dan saya tidak mempunyai semua paket berbayar')" -m opencode/minimax-m2.5-free
-opencode run "console.log('kerjakan next_plan.md , cek progres setiap 5 detik , pastikan semua lulus test, lalu buat perubahan di CHANGELOG.md ')" -m opencode/minimax-m2.5-free
+opencode run "console.log('kerjakan next_plan.md , cek progres setiap 5 detik , setiap perubahan kode pastikan semua lulus test, lalu buat perubahan di CHANGELOG.md ')" -m opencode/minimax-m2.5-free
