@@ -797,6 +797,9 @@ async function executeStep(step, frame, input) {
     }
 
     case "map": {
+      if (frame.depth > 5) {
+        throw new Error("Map depth exceeded (max 5)");
+      }
       const collection = resolveValue(step.collection, ctx) ?? [];
       const varName = step.var || step.item || "item";
       const steps = step.steps || [];
@@ -843,9 +846,12 @@ async function executeStep(step, frame, input) {
         
         let keep = true;
         
-        // If there's a condition, evaluate it
         if (step.condition) {
-          keep = evaluateCondition(step.condition, ctx);
+          const result = evaluateCondition(step.condition, ctx);
+          if (typeof result !== "boolean") {
+            throw new Error("Filter condition must return boolean");
+          }
+          keep = result;
         } else if (steps.length > 0) {
           // If there are steps, execute them and check the result
           for (const subStep of steps) {
@@ -963,13 +969,14 @@ async function executeStep(step, frame, input) {
 /**
  * Create execution frame
  */
-function createFrame() {
+function createFrame(depth = 0) {
   return {
     stepIndex: 0,
     memory: {},
     output: {},
     trace: [],
     error: null,
+    depth,
     metadata: {
       startedAt: Date.now(),
       stepsExecuted: 0
