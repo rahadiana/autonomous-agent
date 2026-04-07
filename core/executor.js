@@ -939,19 +939,6 @@ async function executeStep(step, frame, input) {
       return;
     }
 
-    case "if": {
-      const condition = evaluateCondition(step.condition, ctx);
-      const trueJump = step.true_jump;
-      const falseJump = step.false_jump;
-      
-      if (condition && trueJump !== undefined) {
-        return { jump: trueJump };
-      } else if (!condition && falseJump !== undefined) {
-        return { jump: falseJump };
-      }
-      return;
-    }
-
     case "jump": {
       if (step.to !== undefined) {
         return { jump: step.to };
