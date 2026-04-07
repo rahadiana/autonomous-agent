@@ -2,220 +2,199 @@
 
 ## All Tests PASSED (226 tests) - April 7, 2026
 
-### New Fixes Implemented from next_plan.md
-
 ---
 
-## 1. Benchmark/Ground Truth System (core/evaluation.js)
-
-### Input:
-```json
-{
-  "capability": "math.add",
-  "input": { "a": 2, "b": 3 }
-}
-```
-
-### Output:
-```json
-{
-  "score": 1,
-  "pass": 12,
-  "total": 12,
-  "reason": "benchmark_passed"
-}
-```
-
-### Test: evaluateWithBenchmark
-```javascript
-// Input
-skill = { capability: "math.add", logic: [{ op: "add", a: "$input.a", b: "$input.b", to: "result" }] }
-
-// Output
-{ score: 1.0, pass: 12, total: 12 }
-```
-
----
-
-## 2. Type Safety in DSL Executor (core/executor.js)
+## 1. Fix #1 - Executor with Trace/Validation (core/executor.js)
 
 ### Input:
 ```javascript
-step = { op: "add", a: "2", b: 3 }  // "2" is string, 3 is number
-ctx = { input: {}, memory: {}, output: {} }
-```
-
-### Output:
-```javascript
-Error: Type mismatch: expected number, got string
-```
-
-### Test: assertType function
-```javascript
-// Input
-assertType("hello", "number")
-
-// Output
-Error: Type mismatch: expected number, got string
-```
-
----
-
-## 3. Context-Aware Skill Selection (core/bandit.js)
-
-### Input:
-```javascript
-skills = [
-  { score: 0.6, usage_count: 10 },
-  { score: 0.8, usage_count: 5 }
-]
-context = { similarity: 0.8, contextMatch: 0.9 }
-```
-
-### Output:
-```javascript
-finalScore = 0.77  // similarity*0.5 + score*0.3 + contextMatch*0.2
-```
-
-### Test: computeFinalScore
-```javascript
-// Input
-computeFinalScore(skill, 0.8, 0.9)
-
-// Output
-0.77
-```
-
----
-
-## 4. Cost-Aware Planning (core/planner.js)
-
-### Input:
-```javascript
-plan = {
-  bestPath: [
-    { capability: "api.http_get" },
-    { capability: "math.add" },
-    { capability: "api.http_post" }
-  ]
-}
+step = { op: "add", a: "$input.a", b: "$input.b", to: "result" }
+ctx = { input: { a: 2, b: 3 }, memory: {}, output: {} }
 ```
 
 ### Output:
 ```javascript
 {
-  cost: 7,           // api.http_get=3 + math.add=1 + api.http_post=3
-  rawScore: 1.0,
-  bestScore: 0.65    // 1.0 - (7 * 0.05)
+  result: 5,
+  trace: {
+    step: { op: "add", a: "$input.a", b: "$input.b", to: "result" },
+    before: {},
+    after: { result: 5 },
+    status: "ok"
+  }
 }
 ```
 
-### Test: computePlanCost
+### Test: executeStepWithTrace
 ```javascript
 // Input
-planner.computePlanCost({ bestPath: [{ capability: "api.get" }, { capability: "math.add" }] })
+const skill = { logic: [{ op: "add", a: "$input.a", b: "$input.b", to: "result" }] };
+const input = { a: 5, b: 3 };
 
 // Output
-4  // 3 + 1
+{ result: 8, _meta: { stepsExecuted: 1 } }
 ```
 
 ---
 
-## 5. Circuit Breaker for Skills (core/skillManagement.js)
+## 2. Fix #2 - Inline Validation (core/executor.js)
 
 ### Input:
 ```javascript
-skill = { id: "skill1", failure_count: 6 }
+skill = {
+  output_schema: { required: ["result"], properties: { result: "number" } },
+  logic: [{ op: "set", path: "result", value: 5 }]
+}
+input = {}
 ```
 
 ### Output:
 ```javascript
-{ closed: false, reason: "circuit_open", failure_count: 6 }
+{ result: 5, valid: true }
 ```
 
-### Test: checkCircuitBreaker
+### Test: runDSLWithValidation
 ```javascript
-// After 6 failures
-checkCircuitBreaker(skill1)
+// Input
+const skill = {
+  output_schema: { properties: { value: "number" } },
+  logic: [{ op: "set", path: "value", value: 42 }]
+};
 
-// Output
-{ closed: false, reason: "circuit_open" }
+// Output (success)
+{ value: 42 }
 
-// After recovery
-{ closed: true }
+// Output (schema mismatch - throws error)
+Error: Output schema invalid: Field value expected number, got string
 ```
 
 ---
 
-## 6. System-Level KPI Metrics (core/evaluation.js)
+## 3. Fix #3 - Deterministic Scoring (core/executor.js)
 
 ### Input:
 ```javascript
-success = true
-score = 0.8
+skill = { logic: [{ op: "add", a: 1, b: 1, to: "result" }] }
+input = {}
 ```
 
 ### Output:
 ```javascript
-SystemStats = {
-  success_rate: 1.0,
-  avg_score: 0.8,
-  total_runs: 1
-}
+{ deterministic: true }
+// Same input produces same output on multiple runs
 ```
 
-### Test: updateSystemStats
+### Test: checkDeterminism
 ```javascript
 // Input
-updateSystemStats(true, 0.8)
-updateSystemStats(false, 0.3)
+const skill = { logic: [{ op: "set", path: "x", value: 10 }] };
+const input = {};
+
+// Run twice
+const r1 = await runDSL(skill, input);
+const r2 = await runDSL(skill, input);
+
+// Output
+{ deterministic: true }  // r1 === r2
+```
+
+---
+
+## 4. Fix #4 - Capability Enforcement (core/planner.js)
+
+### Input:
+```javascript
+plan = { bestPath: [{ capability: "math.add" }, { capability: "math.multiply" }] }
+registry = new Set(["math.add", "math.subtract"])
+```
+
+### Output:
+```javascript
+{ valid: false, errors: ["Unknown capability: math.multiply"] }
+```
+
+### Test: validatePlan
+```javascript
+// Input
+const plan = { bestPath: [{ capability: "math.add" }] };
+const registry = new Set(["math.add", "math.subtract"]);
+
+// Output (valid)
+{ valid: true, errors: [] }
+
+// Output (invalid capability)
+{ valid: false, errors: ["Unknown capability: api.http_get"] }
+```
+
+---
+
+## 5. Fix #5 - Blackboard Versioning (core/blackboard.js)
+
+### Input:
+```javascript
+blackboard.write("goal", { task: "test" }, "planner");
+blackboard.write("goal", { task: "test2" }, "planner");
+```
+
+### Output:
+```javascript
+{ version: 2, data: { task: "test2" }, history: [ /* 2 entries */ ] }
+```
+
+### Test: Blackboard versioning
+```javascript
+// Input
+const bb = new Blackboard();
+await bb.write("goal", { task: "test1" }, "planner");
+await bb.write("goal", { task: "test2" }, "planner");
 
 // Output
 {
-  success_rate: 0.5,  // 1/2
-  avg_score: 0.55,    // (0.8 + 0.3) / 2
-  total_runs: 2
+  zone: "goal",
+  version: 2,
+  action: "write",
+  oldData: { task: "test1" },
+  newData: { task: "test2" }
 }
 ```
 
 ---
 
-## 7. Goal Validation (core/goalAutonomy.js)
+## 6. Fix #6 - Mutation with Test Gate (core/mutation.js)
 
 ### Input:
 ```javascript
-goal = "add two numbers"
-currentContext = "math calculation"
+parentSkill = { score: 0.7, usage_count: 10, mutation_count: 1 }
+mutatedScore = 0.8
 ```
 
 ### Output:
 ```javascript
-true  // similarity > 0.5
+{ accept: true, reason: "improvement_accepted", details: { improvement: 0.1 } }
 ```
 
-### Test: isRelevantGoal
+### Test: acceptMutation
 ```javascript
 // Input
-isRelevantGoal("add two numbers", "math calculation")
+const oldScore = 0.7;
+const newScore = 0.85;
 
-// Output
-true
-```
+// Output (improvement above threshold)
+{ accept: true, reason: "improvement_accepted", details: { improvement: 0.15 } }
 
----
+// Input
+const oldScore = 0.7;
+const newScore = 0.72;
 
-## 8. Blackboard Versioning (core/blackboard.js)
+// Output (improvement below threshold)
+{ accept: false, reason: "improvement_below_threshold", details: { improvement: 0.02 } }
 
-### Input:
-```javascript
-blackboard.write("goal", { task: "test" }, "planner")
-blackboard.write("goal", { task: "test2" }, "planner")
-```
+// Input
+const oldScore = 0.7;
+const newScore = 0.6;
 
-### Output:
-```javascript
-zone.version === 2
-history.length increased
+// Output (regression)
+{ accept: false, reason: "regression_detected", details: { oldScore: 0.7, newScore: 0.6, improvement: -0.1 } }
 ```
 
 ---
@@ -224,23 +203,11 @@ history.length increased
 
 | Fix | File | Status |
 |-----|------|--------|
-| Benchmark System | core/evaluation.js | ✅ |
-| Type Safety | core/executor.js | ✅ |
-| Context-Aware Selection | core/bandit.js | ✅ |
-| Cost-Aware Planning | core/planner.js | ✅ |
-| Circuit Breaker | core/skillManagement.js | ✅ |
-| System KPI Metrics | core/evaluation.js | ✅ |
-| Goal Validation | core/goalAutonomy.js | ✅ |
+| Executor with Trace | core/executor.js | ✅ |
+| Inline Validation | core/executor.js | ✅ |
+| Deterministic Scoring | core/executor.js | ✅ |
+| Capability Enforcement | core/planner.js | ✅ |
 | Blackboard Versioning | core/blackboard.js | ✅ |
+| Mutation with Test Gate | core/mutation.js | ✅ |
 
 **Total: 226 tests PASSED**
-
----
-
-### Previous Architecture Status (Still Valid)
-
-1. ✅ Single Orchestrator - core/orchestrator.js
-2. ✅ Test-case based evaluation - core/evaluation/index.js
-3. ✅ Plan validation antar step - core/planner.js
-4. ✅ Controlled mutation - core/mutation.js
-5. ✅ Versioned state untuk Blackboard - core/blackboard.js
