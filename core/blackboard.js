@@ -296,11 +296,11 @@ export class Blackboard {
     if (index > -1) callbacks.splice(index, 1);
   }
 
-  notifySubscribers(zoneName, event) {
+  async notifySubscribers(zoneName, event) {
     if (!this.subscribers.has(zoneName)) return;
     for (const callback of this.subscribers.get(zoneName)) {
       try {
-        callback(event);
+        await callback(event);
       } catch (e) {
         console.error(`Subscriber error for ${zoneName}:`, e);
       }
