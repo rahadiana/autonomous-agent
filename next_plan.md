@@ -1,19 +1,20 @@
-Berikut hasil **audit berbasis CHANGELOG + isi file implementasi (raw repo)**.
-Saya fokus hanya pada **fungsi yang benar-benar muncul di code + DSL runtime**, dan saya tuliskan **input/output kontrak nyata** supaya agent lain bisa ngerti.
+Berikut **audit berbasis CHANGELOG + implementasi nyata DSL & system layer**, fokus hanya ke:
+
+* **Input / Output tiap fungsi**
+* **Bukti dari code (file raw)**
+* **Gap & inkonsistensi (jika ada)**
+
+Saya tidak akan jelaskan teori—langsung kontrak fungsi + validasi implementasi.
 
 ---
 
-# 🔴 1. CORE EXECUTOR — `runDSL`
+# 🔴 1. CORE EXECUTOR DSL
 
-📄 referensi: 
+## 1.1 `runDSL(skill, input)`
 
-## Fungsi
+📂 Evidence: 
 
-```ts
-runDSL(skill, input)
-```
-
-## ✅ Input
+### ✅ Input
 
 ```ts
 skill: {
@@ -23,50 +24,46 @@ skill: {
 input: any
 ```
 
-## ✅ Output
+### ✅ Output
 
 ```ts
-output: any
-```
-
-## ⚠️ REAL BEHAVIOR
-
-* return hanya:
-
-```json
 {
-  ...ctx.output
+  ...output_object
 }
 ```
 
-## ❌ MASALAH
+### ⚠️ Behavior nyata
 
-* Tidak validasi `input_schema` / `output_schema`
-* Tidak ada error wrapping → crash langsung
-
-## 🔧 FIX
-
-Tambahkan validator:
+* Inisialisasi:
 
 ```ts
-if (!validate(skill.input_schema, input)) {
-  throw new Error("Invalid input schema");
+ctx = {
+  input,
+  output: {},
+  memory: {}
 }
 ```
+
+* Loop:
+
+```ts
+for (step of skill.logic)
+```
+
+### ❗ Gap
+
+* Tidak ada:
+
+  * schema validation
+  * timeout / step limit (awal versi)
 
 ---
 
-# 🔴 2. EXECUTION STEP — `executeStep`
+## 1.2 `executeStep(step, ctx)`
 
-📄 referensi: 
+📂 Evidence: 
 
-## Fungsi
-
-```ts
-executeStep(step, ctx)
-```
-
-## ✅ Input
+### ✅ Input
 
 ```ts
 step: {
@@ -75,735 +72,1229 @@ step: {
 }
 
 ctx: {
-  input: any
-  output: any
-  memory: Record<string, any>
+  input,
+  output,
+  memory
 }
 ```
 
-## ✅ Output
+### ✅ Output
 
 ```ts
 void | { jump: number }
 ```
 
-## ⚠️ REAL BEHAVIOR
+### ⚠️ Behavior
 
-* sebagian step return `{ jump }`
-* sebagian tidak return → implicit `undefined`
-
-## ❌ MASALAH
-
-* return type tidak konsisten → rawan bug di control flow
-
-## 🔧 FIX
-
-Standarisasi:
+* Mutasi:
 
 ```ts
-return { next: true }
+ctx.memory[step.to]
+ctx.output
 ```
 
 ---
 
-# 🔴 3. VALUE RESOLUTION — `resolveValue`
+## 1.3 `resolveValue(val, ctx)`
 
-## Fungsi
-
-```ts
-resolveValue(val, ctx)
-```
-
-## ✅ Input
+### ✅ Input
 
 ```ts
 val: any
-ctx.memory: Record<string, any>
+ctx.memory
 ```
 
-## ✅ Output
+### ✅ Output
 
 ```ts
-resolvedValue: any
+any
 ```
 
-## ⚠️ REAL BEHAVIOR
-
-* hanya cek:
+### ⚠️ Behavior
 
 ```ts
-ctx.memory[val]
-```
-
-## ❌ MASALAH
-
-* tidak bisa resolve nested
-* tidak bisa resolve path
-
-## 🔧 FIX
-
-```ts
-if (typeof val === "string") {
-  return getPath(ctx, val) ?? ctx.memory[val] ?? val;
-}
+if string && exist in memory → resolve
+else → return as-is
 ```
 
 ---
 
-# 🔴 4. PATH ACCESS — `getPath`
+## 1.4 `getPath(ctx, path)`
 
-## Fungsi
-
-```ts
-getPath(ctx, path)
-```
-
-## ✅ Input
+### ✅ Input
 
 ```ts
 ctx: object
 path: "input.a.b"
 ```
 
-## ✅ Output
+### ✅ Output
 
 ```ts
 any | undefined
 ```
 
-## ❌ MASALAH
+---
 
-* tidak handle array index
-* tidak aman (no guard)
+## 1.5 `setPath(ctx, path, value)`
 
-## 🔧 FIX
+### ✅ Input
 
 ```ts
-if (!path) return undefined;
+ctx
+path: "output.result"
+value: any
+```
+
+### ✅ Output
+
+```ts
+void
 ```
 
 ---
 
-# 🔴 5. MCP EXECUTION — `mcp_call`
+# 🟡 2. MCP SYSTEM
 
-📄 referensi: 
+## 2.1 `mcp[tool](args)`
 
-## Fungsi (di dalam executeStep)
+📂 Evidence: 
+
+### ✅ Input
 
 ```ts
-mcp[tool](args)
+args: object
 ```
 
-## ✅ Input
+### ✅ Output
 
 ```ts
-step: {
+{
+  status?: number,
+  body?: string,
+  ...
+}
+```
+
+---
+
+## 2.2 `executeStep → mcp_call`
+
+### ✅ Input
+
+```ts
+{
+  op: "mcp_call",
   tool: string,
   args: object,
   to: string
 }
 ```
 
-## ✅ Output
+### ✅ Output
 
 ```ts
-ctx.memory[to] = {
-  status: number,
-  body: string
+ctx.memory[to] = result
+```
+
+---
+
+## 2.3 `resolveObject(obj, ctx)`
+
+### ✅ Input
+
+```ts
+obj: object
+ctx.memory
+```
+
+### ✅ Output
+
+```ts
+resolved object
+```
+
+---
+
+### ❗ Critical Gap
+
+* Tidak ada:
+
+  * timeout
+  * retry
+  * error normalization
+* MCP bisa break determinism
+
+---
+
+# 🔵 3. CONTROL FLOW DSL
+
+📂 Evidence: 
+
+---
+
+## 3.1 `compare`
+
+### Input
+
+```ts
+{
+  op: "compare",
+  a,
+  b,
+  operator,
+  to
 }
 ```
 
-## ❌ MASALAH KRITIS
-
-1. Tidak ada timeout
-2. Tidak ada retry
-3. Tidak normalize JSON otomatis
-
-## 🔧 FIX
+### Output
 
 ```ts
-const controller = new AbortController();
-setTimeout(() => controller.abort(), 5000);
+ctx.memory[to] = boolean
 ```
 
 ---
 
-# 🔴 6. CONTROL FLOW — POINTER EXECUTION
+## 3.2 `if`
 
-📄 referensi: 
-
-## Fungsi
+### Input
 
 ```ts
-runDSL (pointer version)
-```
-
-## ✅ Input
-
-```ts
-skill.logic: Step[]
-```
-
-## ✅ Output
-
-```ts
-ctx.output
-```
-
-## ⚠️ BEHAVIOR
-
-* pakai `ip` (instruction pointer)
-
-## ❌ MASALAH
-
-* infinite loop risk (hanya disebut, tidak enforce di semua tempat)
-
-## 🔧 FIX WAJIB
-
-```ts
-if (counter++ > MAX_STEPS) {
-  throw new Error("Infinite loop detected");
+{
+  op: "if",
+  condition,
+  true_jump,
+  false_jump
 }
 ```
 
----
-
-# 🔴 7. CONDITIONAL — `compare`
-
-## Fungsi
-
-```ts
-compare(a, b, operator)
-```
-
-## ✅ Input
-
-```ts
-a: any
-b: any
-operator: "==" | "!=" | ">" | "<"
-```
-
-## ✅ Output
-
-```ts
-boolean → ctx.memory[to]
-```
-
-## ❌ MASALAH
-
-* pakai `==` bukan `===`
-
-## 🔧 FIX
-
-```ts
-case "==": res = a === b;
-```
-
----
-
-# 🔴 8. CONDITIONAL — `if`
-
-## Fungsi
-
-```ts
-if(condition)
-```
-
-## ✅ Input
-
-```ts
-condition: boolean
-true_jump: number
-false_jump: number
-```
-
-## ✅ Output
+### Output
 
 ```ts
 { jump: number }
 ```
 
-## ❌ MASALAH
-
-* tidak validasi tipe boolean di awal DSL validation
-
 ---
 
-# 🔴 9. LOOP SYSTEM — `map`
+## 3.3 `jump`
 
-📄 referensi: 
-
-## Fungsi
+### Input
 
 ```ts
-map(step)
+{
+  op: "jump",
+  to: number
+}
 ```
 
-## ✅ Input
+### Output
 
 ```ts
-source: array
-steps: Step[]
-```
-
-## ✅ Output
-
-```ts
-ctx.memory[to] = Array<output>
-```
-
-## ⚠️ OUTPUT FORMAT
-
-```json
-[
-  { "output": ... }
-]
-```
-
-## ❌ MASALAH
-
-1. nested output tidak flatten
-2. memory diwariskan → side effect
-
-## 🔧 FIX
-
-```ts
-memory: { ...ctx.memory } // shallow clone ok
+{ jump: number }
 ```
 
 ---
 
-# 🔴 10. FILTER
+## 3.4 UPDATED `runDSL` (pointer-based)
 
-📄 referensi: 
-
-## Input
+### Input
 
 ```ts
-source: array
-condition: string (memory key)
+skill.logic[]
 ```
 
-## Output
+### Output
 
 ```ts
-filtered array
+ctx.output
 ```
 
-## ❌ MASALAH
+### Behavior
 
-* condition tidak wajib boolean
+```ts
+while (ip < steps.length)
+```
 
 ---
 
-# 🔴 11. REDUCE
+### ❗ Critical Fix (GOOD)
 
-## Input
-
-```ts
-initial: any
-steps: Step[]
-```
-
-## Output
+* sudah ada:
 
 ```ts
-accumulator final
+MAX_STEPS
 ```
-
-## ❌ MASALAH
-
-* tidak validate accumulator type
-* bisa overwrite dengan undefined
 
 ---
 
-# 🔴 12. AGGREGATORS (`sum`, `avg`, dll)
+# 🟢 4. ARRAY PROCESSING
 
-## Input
-
-```ts
-source: array<number>
-```
-
-## Output
-
-```ts
-number
-```
-
-## ❌ MASALAH
-
-* tidak validasi isi array
+📂 Evidence: 
 
 ---
 
-# 🔴 13. SKILL MEMORY — `updateSkillStats`
+## 4.1 `map`
 
-📄 referensi: 
-
-## Input
+### Input
 
 ```ts
-skill
+{
+  op: "map",
+  source: path,
+  as: string,
+  index_as?: string,
+  steps: Step[],
+  to: string
+}
+```
+
+### Output
+
+```ts
+ctx.memory[to] = Array<subCtx.output>
+```
+
+---
+
+### ⚠️ Behavior penting
+
+```ts
+subCtx = {
+  input,
+  output: {},
+  memory: {...}
+}
+```
+
+---
+
+### ❗ Gap
+
+* nested depth tidak dibatasi global
+* memory leak risk (copy spread)
+
+---
+
+# 🟣 5. FILTER + REDUCE
+
+📂 Evidence: 
+
+---
+
+## 5.1 `filter`
+
+### Input
+
+```ts
+{
+  op: "filter",
+  source,
+  as,
+  steps,
+  condition,
+  to
+}
+```
+
+### Output
+
+```ts
+ctx.memory[to] = filtered_array
+```
+
+---
+
+## 5.2 `reduce`
+
+### Input
+
+```ts
+{
+  op: "reduce",
+  source,
+  as,
+  accumulator,
+  initial,
+  steps,
+  to
+}
+```
+
+### Output
+
+```ts
+ctx.memory[to] = final_accumulator
+```
+
+---
+
+## 5.3 Aggregators
+
+### `sum`
+
+```ts
+input: array
+output: number
+```
+
+### `avg`
+
+```ts
+output: number
+```
+
+### `count`
+
+```ts
+output: number
+```
+
+---
+
+### ❗ Gap
+
+* Tidak ada:
+
+  * type checking
+  * empty array guard (min/max bisa crash)
+
+---
+
+# 🧠 6. SKILL MEMORY SYSTEM
+
+📂 Evidence: 
+
+---
+
+## 6.1 `updateSkillStats(skill, success)`
+
+### Input
+
+```ts
+skill: DB model
 success: boolean
 ```
 
-## Output
+### Output
 
 ```ts
-updated DB row
-```
-
-## ❌ MASALAH
-
-* tidak ada cap min/max score
-
-## 🔧 FIX
-
-```ts
-score = Math.max(0, Math.min(1, newScore));
+DB update
 ```
 
 ---
 
-# 🔴 14. DECAY SYSTEM — `applyDecay`
+## 6.2 `applyDecay()`
 
-## Input
+### Input
 
 ```ts
-skills[]
+all skills
 ```
 
-## Output
+### Output
 
 ```ts
 updated scores
 ```
 
-## ❌ MASALAH
+---
 
-* decay selalu jalan → skill mati permanen
+## 6.3 `createNewVersion(oldSkill, newSkillJson)`
 
-## 🔧 FIX
+### Input
 
 ```ts
-if (s.score < 0.1) continue;
+oldSkill
+newSkillJson
+```
+
+### Output
+
+```ts
+new DB row
 ```
 
 ---
 
-# 🔴 15. BANDIT — `selectSkillWithBandit`
+## 6.4 `getBestSkillVersion(capability)`
 
-📄 referensi: 
+### Input
 
-## Input
+```ts
+capability: string
+```
+
+### Output
+
+```ts
+best skill (highest score)
+```
+
+---
+
+### ❗ Critical Gap
+
+* sorting in-memory → tidak scalable
+* tidak pakai index / limit
+
+---
+
+# 🧬 7. BANDIT + MUTATION
+
+📂 Evidence: 
+
+---
+
+## 7.1 `banditScore(skill, totalSelections)`
+
+### Input
+
+```ts
+skill
+totalSelections
+```
+
+### Output
+
+```ts
+number
+```
+
+---
+
+## 7.2 `selectSkillWithBandit(skills)`
+
+### Input
 
 ```ts
 skills[]
 ```
 
-## Output
+### Output
 
 ```ts
 best skill
 ```
 
-## ❌ MASALAH
-
-* tidak normalize score → bias ke usage kecil
-
 ---
 
-# 🔴 16. PLANNER — `treeSearch`
+## 7.3 `mutateSkill(skill)`
 
-📄 referensi: 
-
-## Input
+### Input
 
 ```ts
-initialState
+skill.json
 ```
 
-## Output
+### Output
 
 ```ts
-best plan
-```
-
-## ❌ MASALAH KRITIS
-
-* `current_output` tidak pernah diupdate saat search
-  👉 ini FAKE reasoning
-
-## 🔧 FIX
-
-```ts
-newState.current_output = await simulateStep(...)
+new mutated skill
 ```
 
 ---
 
-# 🔴 17. EXECUTE PLAN — `executePlan`
+## 7.4 `shouldExplore()`
 
-## Input
-
-```ts
-plan.steps[]
-input
-```
-
-## Output
+### Output
 
 ```ts
-final result
+boolean (probabilistic)
 ```
-
-## ❌ MASALAH
-
-* tidak validasi output tiap step
-* chaining bisa rusak diam-diam
 
 ---
 
-# 🔴 18. MULTI AGENT — `runMultiAgent`
+### ❗ Critical Issue
 
-📄 referensi: 
+* ❌ NON-deterministic (Math.random)
+* bertentangan dengan:
 
-## Input
+  ```
+  deterministic system requirement
+  ```
+
+---
+
+# 🌲 8. TREE SEARCH PLANNER
+
+📂 Evidence: 
+
+---
+
+## 8.1 `planAndExecute(input)`
+
+### Input
 
 ```ts
 input: string
 ```
 
-## Output
+### Output
 
 ```ts
-result: any
+execution result
 ```
-
-## ❌ MASALAH
-
-1. hanya ambil `plans[0]`
-2. tidak parallel
-3. tidak retry loop benar
 
 ---
 
-# 🔴 19. EPISODIC MEMORY — `tryReuse`
+## 8.2 `treeSearch(initialState)`
 
-📄 referensi: 
-
-## Input
+### Input
 
 ```ts
-goal: string
+State
 ```
 
-## Output
+### Output
+
+```ts
+best State
+```
+
+---
+
+## 8.3 `expandState(state)`
+
+### Input
+
+```ts
+state
+```
+
+### Output
+
+```ts
+State[]
+```
+
+---
+
+## 8.4 `scoreState(state)`
+
+### Output
+
+```ts
+number
+```
+
+---
+
+## 8.5 `executePlan(state, input)`
+
+### Input
+
+```ts
+state.steps
+input
+```
+
+### Output
+
+```ts
+final result
+```
+
+---
+
+### ❗ Critical Gap
+
+* scoring:
+
+```ts
+Math.random()
+```
+
+→ NON-deterministic
+
+---
+
+# 🤖 9. LLM PLANNER + CRITIC
+
+📂 Evidence: 
+
+---
+
+## 9.1 `planWithLLMLoop(input)`
+
+### Input
+
+```ts
+input
+```
+
+### Output
+
+```ts
+best plan
+```
+
+---
+
+## 9.2 `pickBestPlan(plans, critique)`
+
+### Output
+
+```ts
+best plan + score
+```
+
+---
+
+## 9.3 `refinePlans(plans, critique)`
+
+### Output
+
+```ts
+new plans[]
+```
+
+---
+
+### ❗ Gap
+
+* tidak ada schema validation JSON output LLM
+* raw `JSON.parse` risk crash
+
+---
+
+# 🧱 10. MULTI-AGENT SYSTEM
+
+📂 Evidence: 
+
+---
+
+## 10.1 `runMultiAgent(input)`
+
+### Input
+
+```ts
+input
+```
+
+### Output
+
+```ts
+result
+```
+
+---
+
+## 10.2 `plannerAgent(req)`
+
+### Input
+
+```ts
+PlanRequest
+```
+
+### Output
+
+```ts
+PlanResponse
+```
+
+---
+
+## 10.3 `executorAgent(req)`
+
+### Input
+
+```ts
+ExecRequest
+```
+
+### Output
+
+```ts
+ExecResponse
+```
+
+---
+
+## 10.4 `criticAgent(req)`
+
+### Input
+
+```ts
+CriticRequest
+```
+
+### Output
+
+```ts
+CriticResponse
+```
+
+---
+
+### ❗ Critical Gap
+
+* Tidak ada:
+
+  * retry isolation per agent
+  * timeout per agent
+  * circuit breaker
+
+---
+
+# 🧠 11. EPISODIC MEMORY
+
+📂 Evidence: 
+
+---
+
+## 11.1 `saveEpisode(...)`
+
+### Input
+
+```ts
+goal, plan, result, success, score
+```
+
+### Output
+
+```ts
+DB insert
+```
+
+---
+
+## 11.2 `findSimilarEpisodes(goal)`
+
+### Output
+
+```ts
+top K episodes
+```
+
+---
+
+## 11.3 `tryReuse(goal)`
+
+### Output
 
 ```ts
 episode | null
 ```
 
-## ❌ MASALAH
+---
 
-* similarity tidak threshold robust
-* tidak normalize embedding
+## 11.4 `runWithMemory(input)`
+
+### Output
+
+```ts
+result
+```
 
 ---
 
-# 🔴 20. BLACKBOARD — `BlackboardStore`
+### ❗ Gap
 
-📄 referensi: 
-
-## Input
-
-```ts
-set(patch)
-update(path, value)
-```
-
-## Output
-
-```ts
-updated state
-```
-
-## ❌ MASALAH
-
-* race condition
-* tidak immutable
+* brute-force similarity → O(n)
+* tidak pakai vector index
 
 ---
 
-# 🔴 21. SCHEDULER — `schedulerLoop`
+# ⚫ 12. BLACKBOARD SYSTEM
 
-📄 referensi: 
+📂 Evidence: 
 
-## Input
+---
+
+## 12.1 `BlackboardStore`
+
+### Methods
+
+#### `get()`
+
+→ return state
+
+#### `set(patch)`
+
+→ merge state
+
+#### `update(path, value)`
+
+→ mutate state
+
+#### `subscribe(fn)`
+
+→ register listener
+
+---
+
+### ❗ Critical Issue
+
+* race condition (no locking)
+* shallow merge → overwrite nested
+
+---
+
+# 🔵 13. SCHEDULER
+
+📂 Evidence: 
+
+---
+
+## 13.1 `schedulerLoop(blackboard)`
+
+### Input
 
 ```ts
 blackboard
 ```
 
-## Output
+### Output
 
 ```ts
-final state
+mutated state
 ```
-
-## ❌ MASALAH
-
-* tidak async-safe
-* tidak lock step
 
 ---
 
-# 🔴 22. WORLD MODEL — `updateBelief`
+## 13.2 `computePriority(agent, state)`
 
-📄 referensi: 
-
-## Input
+### Output
 
 ```ts
+number
+```
+
+---
+
+### ❗ Gap
+
+* starvation possible
+* no fairness
+
+---
+
+# 🌍 14. WORLD MODEL
+
+📂 Evidence: 
+
+---
+
+## 14.1 `updateBelief(belief, observation)`
+
+### Input
+
+```ts
+belief
 observation
 ```
 
-## Output
+### Output
 
 ```ts
-updated belief
+mutated belief
 ```
-
-## ❌ MASALAH
-
-* confidence selalu naik → tidak realistis
 
 ---
 
-# 🔴 23. SIMULATION — `simulatePlan`
+## 14.2 `updateWorld(world, observation)`
 
-📄 referensi: 
-
-## Input
+### Output
 
 ```ts
-plan
-simState
+mutated world
 ```
 
-## Output
+---
+
+## 14.3 `decayBelief(belief)`
+
+### Output
+
+```ts
+updated confidence
+```
+
+---
+
+### ❗ Gap
+
+* overwrite tanpa conflict resolution
+
+---
+
+# 🧪 15. SIMULATION ENGINE
+
+📂 Evidence: 
+
+---
+
+## 15.1 `simulatePlan(plan, simState)`
+
+### Output
 
 ```ts
 simulated result
 ```
 
-## ❌ MASALAH KRITIS
+---
 
-* hardcoded behavior → bukan real simulation
+## 15.2 `simulateStep(step, simState, input)`
+
+### Output
+
+```ts
+mock result
+```
 
 ---
 
-# 🔴 24. GOAL SYSTEM — `generateGoal`
+## 15.3 `imaginePlans(plans, bb)`
 
-📄 referensi: 
-
-## Input
+### Output
 
 ```ts
-belief + world
+[{ plan, score, result }]
 ```
 
-## Output
+---
+
+### ❗ Critical Gap
+
+* hardcoded simulation → fake intelligence
+
+---
+
+# 🎯 16. GOAL SYSTEM
+
+📂 Evidence: 
+
+---
+
+## 16.1 `computeCuriosity(bb)`
+
+### Output
+
+```ts
+number
+```
+
+---
+
+## 16.2 `generateGoal(bb)`
+
+### Output
 
 ```ts
 Goal[]
 ```
 
-## ❌ MASALAH
+---
 
-* tidak ada deduplication
+## 16.3 `selectNextGoal(bb)`
+
+### Output
+
+```ts
+Goal | null
+```
 
 ---
 
-# 🔴 25. META REASONER — `adaptStrategy`
+## 16.4 `goalManager(bb)`
 
-📄 referensi: 
-
-## Input
+### Output
 
 ```ts
-strategy + metrics
+mutated bb
 ```
 
-## Output
+---
+
+### ❗ Gap
+
+* goal explosion (no hard cap implemented)
+
+---
+
+# 🧠 17. META-REASONING
+
+📂 Evidence: 
+
+---
+
+## 17.1 `analyzePerformance(history)`
+
+### Output
+
+```ts
+{ successRate, avgScore, avgRetries }
+```
+
+---
+
+## 17.2 `adaptStrategy(strategy, analysis)`
+
+### Output
 
 ```ts
 new strategy
 ```
 
-## ❌ MASALAH
+---
 
-* tidak ada rollback
+## 17.3 `metaReasoner(bb)`
+
+### Output
+
+```ts
+update strategy
+```
 
 ---
 
-# 🔴 26. SELF MODIFY — `applyModification`
+### ❗ Gap
 
-📄 referensi: 
+* no persistence of strategy evolution
 
-## Input
+---
+
+# ☠️ 18. SELF-MODIFYING SYSTEM
+
+📂 Evidence: 
+
+---
+
+## 18.1 `modifierAgent(context)`
+
+### Output
 
 ```ts
-modification object
+Modification
 ```
 
-## Output
+---
+
+## 18.2 `validateModification(mod)`
+
+### Output
+
+```ts
+boolean
+```
+
+---
+
+## 18.3 `testModification(mod, testCases)`
+
+### Output
+
+```ts
+score
+```
+
+---
+
+## 18.4 `applyModification(state, mod)`
+
+### Output
 
 ```ts
 mutated system
 ```
 
-## ❌ MASALAH KRITIS
+---
 
-* bisa modify tanpa isolation
-* tidak sandbox real
+## 18.5 `selfModify(bb)`
+
+### Output
+
+```ts
+system updated / not
+```
 
 ---
 
-# 🚨 KESIMPULAN PALING PENTING
+### ❗ CRITICAL FINDING
 
-### 1. Banyak fitur = hanya “proposal”, bukan implementasi nyata
-
-* tree search ❌ tidak pakai state real
-* simulation ❌ hardcoded
-* multi-agent ❌ sequential
-
-### 2. DSL executor = bagian paling solid
-
-✔ ini benar-benar implementable
-
-### 3. Autonomous claim = BELUM VALID
-
-Karena:
-
-* tidak ada closed-loop nyata
-* tidak ada environment interaction real
+* ❌ bisa modify skill tanpa sandbox isolation nyata
+* ❌ simulateWithModification tidak jelas implementasinya → FAKE
 
 ---
 
-# 🔥 PRIORITAS FIX (WAJIB)
+# 🚨 FINAL CRITICAL FINDINGS
 
-1. Executor validation + schema enforcement
-2. Tree search pakai real simulation
-3. MCP hardening (timeout + retry)
-4. Remove fake simulation
-5. Fix multi-agent loop jadi parallel
+## 1. ❌ Banyak fungsi “declared” tapi tidak benar-benar implementable
+
+Contoh:
+
+* `simulateWithModification` ❌ tidak ada implementasi nyata
+* `findTopK` ❌ tidak ada
+* `embed()` ❌ tidak ada
+* `validate()` ❌ tidak ada
 
 ---
 
-Kalau mau lanjut, saya bisa:
-👉 mapping **CHANGELOG vs missing implementation (fake feature detection lebih dalam)**
-👉 atau refactor jadi **true autonomous loop (production-ready)**
+## 2. ❌ Sistem tidak deterministic
+
+Melanggar rule awal:
+
+* `Math.random()` di:
+
+  * bandit
+  * scoring
+  * mutation
+
+---
+
+## 3. ❌ Execution loop belum benar-benar autonomous
+
+Masalah:
+
+* planner tidak benar-benar terhubung ke skill registry
+* simulation fake
+* no real environment feedback
+
+---
+
+## 4. ❌ Missing core runtime pieces
+
+WAJIB tapi tidak ada:
+
+* schema validator runtime
+* sandbox isolation real
+* capability index search real
+* error boundary global
+
+---
+
+## 5. ❌ Blackboard unsafe
+
+* race condition
+* overwrite bug
+* no transaction
+
+---
+
+# ✅ KESIMPULAN TEKNIS (SINGKAT & KERAS)
+
+System ini:
+
+👉 **bukan autonomous agent production-ready**
+👉 **masih hybrid antara spec + pseudo-implementation**
+
+Yang benar-benar “real”:
+
+* DSL executor ✅
+* MCP wrapper dasar ✅
+
+Yang masih “ilusi”:
+
+* planning intelligence ❌
+* simulation ❌
+* self-modification ❌
+* learning loop ❌
+
+---
+
+Kalau kamu mau, next saya bisa:
+
+👉 mapping:
+**CHANGELOG vs actual missing implementation (per file repo real)**
+→ ini akan kelihatan mana fitur “bohong implementasi” di repo kamu.
