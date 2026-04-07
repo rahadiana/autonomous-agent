@@ -1,445 +1,447 @@
-Saya sudah baca isi file yang kamu kirim (arsitektur + modul-modulnya). Secara garis besar: **arahnya benar, tapi implementasi kamu masih belum “system-grade”** — masih banyak bagian yang hanya konsep, belum terikat kuat ke runtime.
+Saya sudah baca struktur konseptual + implementasi yang kamu tulis (semua file yang kamu upload). Saya tidak akan basa-basi: **arsitektur kamu sudah advanced, tapi belum “production-coherent system”**. Banyak bagian bagus tapi belum nyambung secara deterministik dan operasional.
 
-Saya akan langsung kritik **tajam + actionable**, dan setiap poin saya sertakan **contoh kode asli + perbaikan + contoh input/output** supaya bisa langsung dipakai agent kamu.
-
----
-
-# 🔴 1. MASALAH UTAMA: ARSITEKTUR KAMU MASIH “TERLALU TERPISAH”
-
-Dari file:
-
-* multi-agent (planner, executor, critic) 
-* blackboard system 
-* attention + scheduler 
-
-👉 Masalah:
-**Belum ada integrasi runtime yang kuat (single loop yang stabil).**
-
-Saat ini:
-
-* planner jalan sendiri
-* executor jalan sendiri
-* critic jalan sendiri
-
-👉 Ini rawan:
-
-* race condition
-* loop chaos
-* dead state
+Saya breakdown **kritik tajam + perbaikan konkret + contoh input/output**.
 
 ---
 
-## ✅ FIX: CENTRAL ORCHESTRATOR (WAJIB)
+# 🔴 1. MASALAH PALING FATAL (CORE ARCHITECTURE)
 
-Gabungkan semua ke satu loop deterministik:
+## ❌ Kamu membangun SEMUA layer sekaligus
+
+* skill system
+* bandit
+* mutation
+* planner tree
+* blackboard
+* curiosity
+* code generation
+
+👉 Ini salah urutan.
+
+Efek:
+
+* tidak ada **core loop stabil**
+* debugging impossible
+* learning tidak meaningful
+
+---
+
+## ✅ SOLUSI: LOCK CORE LOOP DULU
+
+Minimal sistem harus stabil di:
 
 ```ts
-async function runAgentSystem(input) {
-  const bb = new BlackboardStore();
+1. capability match
+2. execute
+3. validate
+4. score
+5. store
+```
 
-  bb.set({
-    goal: input,
-    status: "planning",
-    cycle: 0
-  });
+Tanpa ini → semua layer atas cuma ilusi.
 
-  const MAX = 10;
+---
 
-  while (bb.state.cycle < MAX) {
-    const state = bb.get();
+# 🔴 2. SKILL EXECUTION MASIH RENTAN (DESIGN BUG)
 
-    switch (state.status) {
-      case "planning":
-        await plannerHandler(bb);
-        break;
+Dari DSL + MCP system kamu :
 
-      case "executing":
-        await executorHandler(bb);
-        break;
+Masalah:
 
-      case "critic":
-        await criticHandler(bb);
-        break;
+```ts
+ctx.memory[step.to] = result;
+```
 
-      case "done":
-        return bb.state.execution.result;
-    }
+❌ overwrite tanpa namespace
+❌ tidak ada schema enforcement
+❌ tidak ada type safety
 
-    bb.state.cycle++;
+---
+
+## ✅ FIX (WAJIB)
+
+```ts
+ctx.memory = ctx.memory || {};
+
+function safeSet(ctx, key, value) {
+  if (ctx.memory[key] !== undefined) {
+    throw new Error(`Memory overwrite: ${key}`);
   }
-
-  throw new Error("Max cycle reached");
+  ctx.memory[key] = value;
 }
 ```
 
----
-
-## 🔍 Contoh Input
-
-```json
-"Ambil data user, filter umur > 20"
-```
-
-## ✅ Output
-
-```json
-{
-  "result": [
-    { "name": "A", "age": 25 }
-  ]
-}
-```
-
----
-
-# 🔴 2. EXECUTOR MASIH TERLALU LEMAH (INI CORE SYSTEM)
-
-Dari DSL + MCP:
-
-
-👉 Masalah:
-
-* belum ada error isolation
-* belum ada step tracing
-* belum ada rollback
-
----
-
-## ✅ FIX: EXECUTOR DENGAN TRACE + ERROR SAFE
+Ganti:
 
 ```ts
-export async function runDSL(skill, input) {
-  const ctx = {
-    input,
-    output: {},
-    memory: {},
-    trace: []
-  };
-
-  for (const step of skill.logic) {
-    try {
-      await executeStep(step, ctx);
-
-      ctx.trace.push({
-        step,
-        memory: { ...ctx.memory }
-      });
-
-    } catch (err) {
-      return {
-        error: err.message,
-        trace: ctx.trace
-      };
-    }
-  }
-
-  return {
-    result: ctx.output,
-    trace: ctx.trace
-  };
-}
+safeSet(ctx, step.to, result);
 ```
 
 ---
 
-## 🔍 Input
+# 🔴 3. VALIDATION TERLALU LEMAH
 
-```json
-{
-  "a": 5,
-  "b": 3
-}
-```
-
-## ✅ Output
-
-```json
-{
-  "result": { "sum": 8 },
-  "trace": [
-    { "step": "add", "memory": {...} }
-  ]
-}
-```
-
----
-
-# 🔴 3. SKILL SYSTEM SUDAH ADA, TAPI BELUM “HIDUP”
-
-Dari:
-
-
-👉 Masalah:
-
-* skill hanya disimpan
-* belum benar-benar **kompetisi real-time**
-
----
-
-## ✅ FIX: GUNAKAN BANDIT SELECTION
-
-Gabungkan:
-
-
+Dari evaluator system :
 
 ```ts
-async function selectBestSkill(skills) {
-  const total = skills.reduce((s, x) => s + x.usage_count, 0);
+if (result !== undefined) score += 0.4;
+```
 
-  return skills.sort((a, b) => {
-    return banditScore(b, total) - banditScore(a, total);
-  })[0];
+Ini ngawur.
+
+👉 result ada ≠ benar
+
+---
+
+## ✅ FIX (STRICT VALIDATION)
+
+```ts
+function evaluate(result, schemaValidation) {
+  let score = 0;
+
+  if (schemaValidation.valid) score += 0.3;
+
+  if (deepCheck(result)) score += 0.4;
+
+  if (noException(result)) score += 0.2;
+
+  score += 0.1; // simplicity
+
+  return score;
+}
+```
+
+Tambahkan:
+
+```ts
+function deepCheck(result) {
+  if (typeof result !== "object") return false;
+  if (Object.keys(result).length === 0) return false;
+  return true;
 }
 ```
 
 ---
 
-## 🔍 Input
+# 🔴 4. SKILL DUPLICATION PROBLEM (KRITIS)
 
-```json
-skills: [
-  { score: 0.9, usage: 10 },
-  { score: 0.7, usage: 1 }
-]
+Kamu pakai capability string:
+
+```ts
+"api.fetch_user"
 ```
 
-## ✅ Output
+❌ tidak ada canonicalization
+❌ tidak ada semantic grouping
 
-```json
-skill dengan usage rendah bisa tetap dipilih (exploration)
-```
+👉 hasil:
 
-👉 ini bikin sistem kamu **tidak stagnan**
+* skill duplikat
+* DB jadi sampah
 
 ---
 
-# 🔴 4. MUTATION SYSTEM BERBAHAYA (SAAT INI CHAOTIC)
+## ✅ FIX: CAPABILITY NORMALIZER
 
-Dari:
+```ts
+function normalizeCapability(text) {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\.]/g, "")
+    .trim();
+}
+```
 
+Tambahkan UNIQUE constraint di DB.
 
-👉 Masalah:
+---
 
-* mutation random
-* tidak ada constraint kuat
-* bisa degrade sistem
+# 🔴 5. BANDIT SYSTEM BELUM TERINTEGRASI BENAR
+
+Dari bandit :
+
+Masalah:
+
+* tidak pakai context similarity
+* hanya global score
+
+👉 ini salah.
+
+---
+
+## ✅ FIX: CONTEXTUAL BANDIT
+
+```ts
+finalScore =
+  (similarity * 0.5) +
+  (skill.score * 0.3) +
+  (exploration * 0.2);
+```
+
+Kalau tidak → agent pilih skill salah konteks.
+
+---
+
+# 🔴 6. MUTATION SYSTEM BERBAHAYA
+
+Masalah dari mutation :
+
+```ts
+step.op = Math.random() > 0.5 ? "add" : "subtract";
+```
+
+❌ random tanpa constraint
+❌ bisa rusak logic total
 
 ---
 
 ## ✅ FIX: CONTROLLED MUTATION
 
-Tambahkan guard:
-
 ```ts
-function safeMutate(skill) {
-  if (skill.usage_count < 5) return null;
+function mutateSkill(skill) {
+  const clone = structuredClone(skill);
 
-  if (skill.score < 0.6) return null;
+  const allowedMutations = [
+    () => tweakConstant(clone),
+    () => swapSafeOperator(clone),
+  ];
 
-  return mutateSkill(skill);
+  const mutation =
+    allowedMutations[Math.floor(Math.random() * allowedMutations.length)];
+
+  mutation();
+
+  return clone;
 }
 ```
 
 ---
 
-## 🔍 Input
+# 🔴 7. BLACKBOARD SYSTEM ADA RACE CONDITION
 
-```json
-skill.score = 0.4
-```
-
-## Output
-
-```json
-mutation = null
-```
-
-👉 hanya skill bagus yang berevolusi
-
----
-
-# 🔴 5. PLANNER SUDAH CANGGIH, TAPI BELUM TERIKAT KE EXECUTOR
-
-Dari:
-
-
-👉 Masalah:
-
-* planner output → belum divalidasi capability
-* executor bisa gagal total
-
----
-
-## ✅ FIX: CAPABILITY VALIDATION LAYER
+Dari blackboard :
 
 ```ts
-function validatePlan(plan, capabilities) {
-  return plan.steps.every(s =>
-    capabilities.includes(s.capability)
-  );
-}
+this.state = { ...this.state, ...patch };
 ```
+
+❌ no locking
+❌ no versioning
 
 ---
 
-## 🔍 Input
-
-```json
-step.capability = "magic.ai"
-```
-
-## Output
-
-```json
-false → reject plan
-```
-
----
-
-# 🔴 6. BLACKBOARD BAGUS, TAPI BELUM “SAFE”
-
-Dari:
-
-
-👉 Masalah:
-
-* overwrite state langsung
-* tidak ada versioning
-
----
-
-## ✅ FIX: IMMUTABLE PATCH SYSTEM
+## ✅ FIX
 
 ```ts
-set(patch) {
-  this.state = {
-    ...this.state,
-    ...patch,
-    _version: (this.state._version || 0) + 1
-  };
-}
+this.version++;
+
+this.state = {
+  ...this.state,
+  ...patch,
+  _version: this.version
+};
 ```
-
-👉 ini penting untuk debugging + replay
-
----
-
-# 🔴 7. PALING KRITIS: SYSTEM KAMU BELUM ADA “FAIL SAFE”
-
-Saat ini:
-
-* kalau planner salah → chaos
-* kalau executor error → stop
-
----
-
-## ✅ FIX: FALLBACK STRATEGY
-
-```ts
-try {
-  return await runDSL(skill, input);
-} catch {
-  return await runSimpleSkill(input);
-}
-```
-
----
-
-# 🔴 8. CODE GENERATION (PALING BERBAHAYA)
-
-Dari:
-
-
-👉 Masalah:
-
-* vm masih lemah untuk production
-* belum ada isolation level tinggi
-
----
-
-## ✅ FIX: MINIMAL HARDENING
 
 Tambahkan:
 
 ```ts
-const sandbox = {
-  input,
-  output: {},
-  Math,
-  JSON
-};
+if (incomingVersion < currentVersion) reject
 ```
 
-🚫 jangan expose:
+---
 
-* process
-* require
-* global
+# 🔴 8. CODE GENERATION = BOM WAKTU
+
+Dari sandbox system :
+
+Masalah:
+
+* masih pakai vm
+* belum isolate process
+
+👉 ini bahaya kalau scale
 
 ---
 
-# 🔥 9. GAP TERBESAR DI SISTEM KAMU
+## ✅ FIX (MINIMAL)
 
-Ini yang paling penting:
+```ts
+import { fork } from "child_process";
+```
 
-## ❌ BELUM ADA:
-
-1. **Capability extractor yang benar**
-2. **Test generator yang pintar**
-3. **Evaluation yang meaningful**
-4. **Memory retrieval real (vector DB belum nyata)**
+Jangan pakai vm di production.
 
 ---
 
-# ✅ REKOMENDASI PRIORITAS (URUTAN WAJIB)
+# 🔴 9. SYSTEM KAMU BELUM PUNYA “GROUND TRUTH”
 
-Jangan lompat.
+Ini paling penting.
 
-### 1. Executor stabil (trace + error safe)
+Semua evaluasi kamu:
 
-### 2. Skill scoring + bandit
+👉 internal
 
-### 3. Capability validation
+Tidak ada:
 
-### 4. Planner ↔ executor binding
+* dataset
+* benchmark
+* expected output
 
-### 5. Baru mutation + evolution
-
----
-
-# 🧠 REALITY CHECK
-
-Sistem kamu sekarang:
-
-✅ sudah:
-
-* modular
-* adaptive
-* extensible
-
-❌ belum:
-
-* stabil
-* reliable
-* production-safe
+👉 artinya learning kamu semu
 
 ---
 
-# 🚀 KALAU MAU NAIK LEVEL (SERIUS)
+## ✅ FIX: TEST DATASET
 
-Langkah berikutnya:
+```ts
+const testCases = [
+  {
+    input: { a: 2, b: 3 },
+    expected: { result: 5 }
+  }
+];
+```
 
-👉 **“buat capability extractor berbasis embedding + vector DB real”**
+Validation:
 
-Karena sekarang:
-
-> agent kamu masih “buta” dalam memilih skill
+```ts
+function compare(expected, actual) {
+  return JSON.stringify(expected) === JSON.stringify(actual);
+}
+```
 
 ---
 
-Kalau kamu mau, saya bisa lanjut ke:
+# 🔴 10. TIDAK ADA FAILURE MEMORY
 
-* audit struktur folder repo kamu (biar tidak chaos)
-* atau langsung bikin **executor DSL production-grade (bukan vm lagi)**
+Kalau skill gagal:
 
-Tentukan saja.
+👉 tidak disimpan sebagai pengalaman
+
+---
+
+## ✅ FIX
+
+```ts
+await FailureLog.create({
+  skill_id: skill.id,
+  input,
+  error,
+  timestamp: new Date()
+});
+```
+
+---
+
+# 🧪 CONTOH FLOW (INPUT → OUTPUT)
+
+## INPUT USER
+
+```json
+{
+  "task": "jumlahkan dua angka",
+  "input": { "a": 2, "b": 3 }
+}
+```
+
+---
+
+## SYSTEM FLOW
+
+### 1. capability extraction
+
+```json
+"math.add"
+```
+
+---
+
+### 2. skill ditemukan
+
+```json
+{
+  "name": "add_numbers",
+  "logic": [
+    { "op": "add", "a": "input.a", "b": "input.b", "to": "sum" },
+    { "op": "set", "path": "output.result", "value": "sum" }
+  ]
+}
+```
+
+---
+
+### 3. execution result
+
+```json
+{
+  "result": 5
+}
+```
+
+---
+
+### 4. validation
+
+```json
+{
+  "valid": true
+}
+```
+
+---
+
+### 5. update stats
+
+```json
+{
+  "score": 0.92,
+  "usage_count": 12
+}
+```
+
+---
+
+# 🧠 FINAL ASSESSMENT (JUJUR)
+
+Sistem kamu:
+
+✅ sudah sangat advanced secara ide
+❌ belum stabil sebagai system
+
+Kategori sekarang:
+👉 **research prototype**
+
+Belum:
+👉 production-ready agent
+
+---
+
+# 🎯 PRIORITAS PERBAIKAN (URUTAN WAJIB)
+
+Kalau kamu loncat-loncat → sistem kamu gagal.
+
+1. **Validator + evaluator bener**
+2. **Executor deterministic**
+3. **Capability normalization**
+4. **Skill memory (score bener)**
+5. **Baru masuk bandit + mutation**
+6. **Baru multi-agent / blackboard**
+
+---
+
+# 🚨 REAL TALK
+
+Kalau kamu lanjut tanpa benerin fondasi:
+
+👉 sistem kamu akan “terlihat pintar”
+👉 tapi sebenarnya tidak belajar apa-apa
+
+---
+
+Kalau mau lanjut serius, pilih satu:
+
+👉 **“audit executor + DSL runtime”**
+👉 **“audit evaluator + scoring system”**
+👉 **“audit skill registry + DB design”**
+
+Saya akan bedah sampai level implementasi yang benar-benar bisa jalan, bukan sekadar konsep.
