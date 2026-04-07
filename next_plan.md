@@ -1,492 +1,464 @@
-Saya sudah baca seluruh dokumen arsitektur yang kamu attach + struktur sistem yang kamu arahkan. Saya akan langsung to the point: **sistem kamu sudah advanced secara konsep, tapi belum “tight” secara implementasi**. Banyak bagian masih longgar → ini yang bikin agent kamu gagal jadi “benar-benar autonomous”.
+Berikut **audit keras & langsung ke masalah** berdasarkan:
 
-Saya akan breakdown **kritik paling krusial + perbaikan konkret (dengan contoh input/output + kode patch)**. Kita fokus step-by-step, bukan teori.
-
----
-
-# 🔴 MASALAH UTAMA (FATAL)
-
-## 1. ❌ “Pseudo-intelligence”
-
-Masalah:
-
-* Kamu sudah punya planner, critic, mutation, dll
-* Tapi **semua masih loosely connected**
-
-Akibat:
-
-* Sistem terlihat kompleks
-* Tapi **tidak benar-benar belajar / improve**
-
-👉 Ini terlihat jelas dari flow kamu:
-
-* tidak ada **feedback loop yang kuat ke skill registry**
-* tidak ada **strict gating sebelum skill masuk DB**
+* Planning docs (semua file yang kamu upload)
+* Spesifikasi sistem (DSL, planner, multi-agent, dll)
+* **TANPA asumsi implementasi ada kalau tidak terbukti**
 
 ---
 
-# 🧠 1. SKILL QUALITY GATE (INI WAJIB ADA)
+# 🚨 TEMUAN KRITIS
 
-Saat ini kamu:
+## 1. ❌ IMPLEMENTATION GAP BESAR (SYSTEM = MASIH BLUEPRINT)
 
-> generate → test → save
+### Evidence
 
-Masalah:
+Semua file yang ada:
 
-> evaluator kamu terlalu lemah → skill jelek tetap masuk
+* DSL (`executor`, `map`, `filter`, dll)
+* Planner (tree search, hierarchical, LLM loop)
+* Blackboard
+* World model
+* Self-modifying system
+
+👉 **SEMUA berbentuk desain + pseudo-code**, bukan implementasi nyata.
+
+Contoh:
+
+* `runDSL()` hanya ditulis sebagai contoh fungsi 
+* `treeSearch()` hanya skeleton tanpa integrasi real executor 
+* Multi-agent orchestration hanya pseudo flow 
+
+### Dampak
+
+👉 Sistem **belum bisa jalan sebagai agent**
+👉 Ini masih:
+
+> “spec-heavy prototype”, bukan “autonomous system”
 
 ---
 
-## 🔧 PERBAIKAN
+## 2. ❌ AUTONOMY = ILUSI (LOOP BELUM EXIST)
 
-Tambahkan **hard acceptance layer**
+### Requirement agent:
+
+Agent harus punya loop:
+
+```
+observe → plan → act → evaluate → learn → repeat
+```
+
+### Reality
+
+Loop hanya ada di dokumen:
+
+* backend flow (simple loop) 
+* multi-agent orchestrator (pseudo) 
+* scheduler loop (blackboard) 
+
+👉 Tidak ada bukti:
+
+* loop persistent (daemon / worker)
+* state progression nyata
+* retry cycle real
+
+### Dampak
+
+👉 Sistem tidak autonomous
+👉 Hanya “request-response generator”
+
+---
+
+## 3. ❌ DSL EXECUTOR BELUM PRODUCTION-READY
+
+### Issue A — No Validation Layer
+
+Executor langsung jalan:
 
 ```ts
-function shouldAcceptSkill(evaluation) {
-  if (!evaluation.valid) return false;
-
-  if (evaluation.score < 0.85) return false;
-
-  if (evaluation.issues.length > 0) return false;
-
-  return true;
-}
+for (const step of skill.logic)
 ```
+
+Tanpa:
+
+* schema validation
+* op validation
+* jump boundary check
+
+👉 Padahal doc sendiri bilang validation WAJIB 
 
 ---
 
-## 🔁 PATCH FLOW
-
-Ganti ini:
+### Issue B — Infinite Loop Risk
 
 ```ts
-if (evaluation.score >= 0.8) {
-  saveSkill(skill)
-}
+while (ip < steps.length)
 ```
 
-👉 jadi:
+❌ Tidak ada:
+
+* max steps global
+* loop detection
+
+👉 hanya ada limit di `map/filter/reduce` inner loop, bukan global
+
+---
+
+### Issue C — No Deterministic Guarantee
+
+* MCP call async
+* Tidak ada timeout
+* Tidak ada retry policy
+
+👉 melanggar:
+
+> "deterministic + evaluable"
+
+---
+
+### FIX (WAJIB)
+
+#### File: executor (runDSL)
 
 ```ts
-if (shouldAcceptSkill(evaluation)) {
-  await saveSkill(skill);
-} else {
-  // reject + log
-}
-```
+const MAX_STEPS = 1000;
 
----
+let stepsCount = 0;
 
-## 📌 CONTOH
-
-### Input:
-
-```
-"jumlahkan 2 angka"
-```
-
-### Skill hasil LLM:
-
-```json
-{
-  "logic": "output.result = input.a + input.b"
-}
-```
-
-### Evaluasi:
-
-```json
-{
-  "score": 0.82,
-  "valid": true,
-  "issues": ["no input validation"]
-}
-```
-
-👉 ❌ HARUS DITOLAK
-
----
-
-# 🔴 2. EXECUTOR MASIH RAW (RISKY + LIMITASI)
-
-Kamu masih pakai:
-
-```ts
-vm.Script(skill.logic)
-```
-
-Masalah:
-
-* tidak deterministic
-* tidak composable
-* tidak bisa evolve
-
----
-
-## 🔧 SOLUSI: WAJIB DSL ENGINE
-
-Dokumen kamu sudah arah ke DSL (bagus), tapi implementasi belum konsisten 
-
----
-
-## 🔧 PATCH
-
-Ubah skill dari:
-
-```json
-"logic": "output.result = input.a + input.b"
-```
-
-👉 jadi:
-
-```json
-"logic": [
-  {
-    "op": "add",
-    "a": "input.a",
-    "b": "input.b",
-    "to": "result"
-  },
-  {
-    "op": "set",
-    "path": "output.result",
-    "value": "result"
+while (ip < steps.length) {
+  if (stepsCount++ > MAX_STEPS) {
+    throw new Error("Execution limit exceeded");
   }
-]
-```
 
----
-
-## 🔁 EXECUTOR FIX
-
-```ts
-async function executeStep(step, ctx) {
-  switch (step.op) {
-    case "add":
-      ctx.memory[step.to] =
-        resolve(step.a, ctx) + resolve(step.b, ctx);
-      break;
-
-    case "set":
-      setPath(ctx, step.path, resolve(step.value, ctx));
-      break;
+  if (ip < 0 || ip >= steps.length) {
+    throw new Error("Invalid jump target");
   }
+
+  ...
 }
 ```
 
 ---
 
-## 📌 CONTOH INPUT / OUTPUT
+## 4. ❌ SKILL SYSTEM TIDAK BENAR-BENAR “LEARNING”
 
-### Input:
-
-```json
-{ "a": 2, "b": 3 }
-```
-
-### Output:
-
-```json
-{ "result": 5 }
-```
-
----
-
-# 🔴 3. SKILL DUPLICATION (INI DIAM-DIAM NGERUSAK)
-
-Masalah:
-
-* capability tidak dinormalisasi
-* hasilnya:
-
-```
-"sum number"
-"sum numbers"
-"add numbers"
-```
-
-👉 jadi 3 skill berbeda
-
----
-
-## 🔧 FIX
-
-```ts
-function normalizeCapability(text) {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "_")
-    .trim();
-}
-```
-
----
-
-## 🔁 BEFORE SAVE
-
-```ts
-skill.capability = normalizeCapability(skill.capability);
-```
-
----
-
-## 📌 CONTOH
-
-Input:
-
-```
-"Jumlahkan angka"
-```
-
-Output capability:
-
-```
-"sum_numbers"
-```
-
----
-
-# 🔴 4. KAMU BELUM PUNYA “REAL LEARNING”
-
-Padahal kamu sudah desain ini:
+### Yang DIKLAIM:
 
 * reinforcement
 * decay
-* versioning 
+* bandit
+* mutation
 
-Masalah:
-👉 belum benar-benar di-integrasikan ke execution pipeline
+### Reality:
+
+Semua hanya function terpisah:
+
+* `updateSkillStats()` 
+* `banditScore()` 
+* `mutateSkill()` 
+
+👉 TIDAK ADA:
+
+* integration ke executor flow
+* automatic trigger
+* feedback loop nyata
 
 ---
 
-## 🔧 FIX (WAJIB)
+### Critical Missing Link
 
-Tambahkan setelah execution:
+Seharusnya:
 
 ```ts
-const result = await runDSL(skill, input);
-
-const validation = validate(skill.output_schema, result);
-
-await updateSkillStats(skill, validation.valid);
+execute → evaluate → update skill → influence selection
 ```
 
----
+TAPI:
 
-## 📌 DAMPAK
+* executor tidak call evaluator
+* evaluator tidak update registry
+* registry tidak dipakai planner
 
-Sebelum:
-
-* semua skill dianggap sama
-
-Sesudah:
-
-* skill jelek mati
-* skill bagus naik
+👉 semua komponen **tidak tersambung**
 
 ---
 
-# 🔴 5. BANDIT STRATEGY BELUM DIPAKAI
+### FIX
 
-Padahal kamu sudah punya design UCB 
-
-Masalah:
-👉 selection masih naive (top similarity)
-
----
-
-## 🔧 FIX
-
-Ganti:
-
-```ts
-return bestSimilaritySkill;
-```
-
-👉 jadi:
-
-```ts
-return selectSkillWithBandit(skills);
-```
-
----
-
-## 📌 DAMPAK
-
-Sebelum:
-
-* stuck di skill lama
-
-Sesudah:
-
-* eksplorasi + improvement
-
----
-
-# 🔴 6. BLACKBOARD SUDAH ADA — TAPI BELUM TERKONTROL
-
-Masalah:
-
-* semua agent bisa jalan → chaos
-
-Padahal kamu sudah punya:
-
-* attention
-* scheduler 
-
----
-
-## 🔧 FIX WAJIB
-
-Tambahkan guard:
-
-```ts
-if (blackboard.locked) return;
-
-blackboard.locked = true;
-
-await agent.run();
-
-blackboard.locked = false;
-```
-
----
-
-## 📌 TANPA INI:
-
-* race condition
-* overwrite state
-
----
-
-# 🔴 7. SKILL MUTATION MASIH “MAIN-MAIN”
-
-Masalah:
-
-* mutation random
-* tidak ada kontrol kualitas
-
----
-
-## 🔧 FIX
-
-Tambahkan filter:
-
-```ts
-if (skill.usage_count < 5) return; // jangan mutate skill baru
-
-if (skill.score < 0.6) return; // skill jelek jangan diwariskan
-```
-
----
-
-## 📌 DAMPAK
-
-Sebelum:
-
-* noise
-
-Sesudah:
-
-* evolution
-
----
-
-# 🔴 8. TIDAK ADA FAILURE MEMORY
-
-Masalah:
-
-* agent tidak belajar dari error
-
----
-
-## 🔧 FIX
+#### File: main pipeline
 
 Tambahkan:
 
 ```ts
-await FailureLog.create({
-  input,
-  skill_id: skill.id,
-  error,
-  timestamp: new Date()
+const result = await runDSL(skill, input);
+
+const evaluation = await evaluator.run({
+  skill,
+  result
 });
+
+await updateSkillStats(skill, evaluation.valid);
+
+if (evaluation.score < 0.6) {
+  await createNewVersion(skill, improvedSkill);
+}
 ```
 
 ---
 
-# 🔴 9. KAMU BELUM PUNYA “REAL PLAN EXECUTION TRACE”
+## 5. ❌ PLANNER = TIDAK EXECUTABLE
 
-Padahal kamu butuh ini untuk:
+### Issue
 
-* debugging
-* learning
-* critic
+Planner output:
+
+```json
+{ "capability": "api.fetch_data" }
+```
+
+TAPI:
+
+❌ Tidak ada mapping:
+
+* capability → skill instance
+* skill → DSL
 
 ---
 
-## 🔧 FIX
+### Dampak
+
+Planner menghasilkan plan yang:
+
+👉 **tidak bisa dieksekusi**
+
+---
+
+### FIX
+
+#### Tambahkan resolver layer
 
 ```ts
-ctx.trace.push({
-  step: step.op,
-  input: step,
-  output: result
-});
+async function resolveCapability(capability) {
+  return await registry.findBest(capability);
+}
+```
+
+#### Saat execute plan:
+
+```ts
+for (const step of plan.steps) {
+  const skill = await resolveCapability(step.capability);
+
+  if (!skill) throw new Error("Skill not found");
+
+  output = await runDSL(skill.json, step.input);
+}
 ```
 
 ---
 
-# 🧠 RINGKASAN (INI PRIORITAS IMPLEMENTASI)
+## 6. ❌ MEMORY SYSTEM TIDAK TERPAKAI
 
-Urutan yang benar:
+### Ada:
 
-1. ✅ Skill acceptance gate
-2. ✅ DSL executor (hapus vm raw)
-3. ✅ Capability normalization
-4. ✅ Reinforcement update
-5. ✅ Bandit selection
-6. ✅ Blackboard lock + scheduler
-7. ✅ Controlled mutation
-8. ✅ Failure logging
-9. ✅ Execution trace
+* episodic memory 
+* embedding + similarity
 
----
+### Tidak ada:
 
-# ⚠️ REALITY CHECK (PENTING)
+* dipanggil di planner utama
+* dipakai di executor
+* update usage_count
 
-Sekarang sistem kamu:
-
-👉 **advanced secara desain**
-❌ **belum robust secara runtime**
-
-Kalau kamu deploy sekarang:
-
-* akan terlihat “AI”
-* tapi sebenarnya fragile
+👉 hanya “storage”, bukan “memory system”
 
 ---
 
-# 🚀 NEXT STEP (KITA LANJUT STEP BY STEP)
+### FIX
 
-Jangan lanjut semua.
+Inject ke entry pipeline:
 
-Pilih satu:
+```ts
+const reused = await tryReuse(input);
 
-### 1️⃣ “perbaiki executor DSL full”
-
-(ini paling kritis)
-
-### 2️⃣ “implement skill registry + scoring real”
-
-(biar agent benar-benar belajar)
-
-### 3️⃣ “implement planner → executor → critic loop yang rigid”
-
-(biar tidak chaos)
+if (reused) {
+  plan = adaptPlan(reused.plan, input);
+} else {
+  plan = await hierarchicalPlan(input);
+}
+```
 
 ---
 
-Kalau kamu serius mau ini jadi sistem real (bukan demo), kita harus **bedah satu bagian sampai production-ready**, bukan lompat-lompat.
+## 7. ❌ BLACKBOARD SYSTEM TIDAK REAL
 
-Pilih sekarang.
+### Problem
+
+Blackboard:
+
+```ts
+subscribe(fn)
+```
+
+❌ Tidak ada:
+
+* concurrency control
+* race handling
+* locking
+
+👉 Multiple agent bisa overwrite state
+
+---
+
+### FIX
+
+Gunakan atomic update:
+
+```ts
+async set(patch) {
+  await mutex.lock();
+
+  this.state = { ...this.state, ...patch };
+
+  mutex.unlock();
+}
+```
+
+---
+
+## 8. ❌ SELF-MODIFYING SYSTEM BERBAHAYA & BELUM VALID
+
+### Masalah
+
+System bisa:
+
+* modify skill
+* modify strategy
+
+TAPI:
+
+❌ Tidak ada:
+
+* isolation
+* rollback trigger otomatis
+* audit trail lengkap
+
+---
+
+### FIX
+
+Tambahkan guard:
+
+```ts
+if (mod.target === "executor") {
+  throw new Error("Forbidden modification");
+}
+```
+
+Dan:
+
+```ts
+await saveVersion(state);
+
+try {
+  applyModification(state, mod);
+} catch (e) {
+  await rollback(lastVersion);
+}
+```
+
+---
+
+## 9. ❌ OVER-ENGINEERING TANPA FOUNDATION
+
+Urutan kamu:
+
+```
+DSL → OK
+Executor → OK
+...
+langsung ke:
+- world model
+- imagination
+- curiosity
+- self-modifying
+```
+
+Padahal:
+
+❌ belum ada:
+
+* stable execution loop
+* reliable skill registry
+* working planner
+
+---
+
+### Dampak
+
+👉 Sistem jadi:
+
+> kompleks di atas fondasi kosong
+
+---
+
+# 🔥 KESIMPULAN KERAS
+
+## STATUS NYATA REPO
+
+| Komponen        | Status             |
+| --------------- | ------------------ |
+| DSL design      | ✅ bagus            |
+| Executor core   | ⚠️ setengah        |
+| Planner         | ❌ tidak executable |
+| Learning system | ❌ tidak terhubung  |
+| Memory          | ❌ tidak aktif      |
+| Multi-agent     | ❌ simulasi         |
+| Autonomy        | ❌ tidak ada        |
+
+---
+
+# 🧠 PRIORITAS FIX (WAJIB URUT)
+
+## 1. Stabilkan Executor (P0)
+
+* validation
+* loop guard
+* deterministic MCP
+
+## 2. Bangun REAL execution loop (P0)
+
+* observe → act → evaluate → repeat
+
+## 3. Hubungkan skill system (P0)
+
+* executor ↔ evaluator ↔ registry
+
+## 4. Capability → skill resolver (P0)
+
+## 5. Baru:
+
+* planner
+* memory
+* bandit
+* dll
+
+---
+
+# ⚠️ FINAL STATEMENT
+
+Repo ini:
+
+> ❌ **Bukan autonomous agent**
+> ✅ **Adalah arsitektur blueprint yang sangat ambisius**
+
+Masalah utamanya bukan di ide —
+tapi di:
+
+> **tidak ada integrasi nyata antar komponen**
+
+---
+
+Kalau kamu mau, next step gue bisa:
+
+👉 breakdown jadi **roadmap implementasi real (step-by-step, bukan teori)**
+👉 atau audit repo GitHub actual kalau kamu kasih akses file real (bukan doc)
