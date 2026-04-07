@@ -14,7 +14,7 @@ Contoh:
 * DSL executor → ada pseudo-code TS, tapi repo target Node (JS)
 * Planner / Critic → hanya prompt
 * Blackboard → hanya contoh class
-* Simulation / world model → tidak ada integrasi nyata
+* Simulation / world model → tidak ada integrasi nyata.
 
 👉 Ini berarti:
 
