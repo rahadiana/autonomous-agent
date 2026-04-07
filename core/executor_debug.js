@@ -82,7 +82,8 @@ export function setPath(obj, path, value) {
  * - $input.path → input reference
  * - literal strings preserved
  */
-export function resolveValue(val, ctx) {
+function resolveValue(val, ctx) {
+  if (val === "sum" || val === "x") console.log("resolveValue(" + val + ") called, memory:", JSON.stringify(ctx.memory));
   if (val === undefined || val === null) return undefined;
   
   if (typeof val === "string") {
@@ -123,20 +124,8 @@ export function resolveValue(val, ctx) {
     
     // Simple key lookup in memory - ONLY for exact key match
     // Use hasOwnProperty to avoid prototype chain issues
-    // Priority: 
-    // 1. frame.memory (current values set by loops/steps)
-    // 2. ctx.memory.memory (nested memory from set operations)
-    // 3. ctx.memory (top level, rare case)
     if (Object.prototype.hasOwnProperty.call(ctx.memory, val)) {
       return ctx.memory[val];
-    }
-    if (ctx.memory.memory && Object.prototype.hasOwnProperty.call(ctx.memory.memory, val)) {
-      return ctx.memory.memory[val];
-    }
-    
-    // Also check output (for loop variables set via setPath)
-    if (Object.prototype.hasOwnProperty.call(ctx.output, val)) {
-      return ctx.output[val];
     }
     
     // Fallback chain (||)
@@ -465,8 +454,7 @@ async function executeStep(step, frame, input) {
     }
 
     case "for": {
-      // Resolve collection - check nested memory structure first
-      let collection = ctx.memory.memory?.[step.collection] ?? resolveValue(step.collection, ctx) ?? [];
+      const collection = resolveValue(step.collection, ctx) ?? [];
       const varName = step.var || step.item || "item";
       const indexName = step.index || "index";
       const steps = step.steps || [];

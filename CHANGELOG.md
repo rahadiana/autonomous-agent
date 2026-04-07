@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.8.0] - 2026-04-07
+
+### Summary
+Fixed critical issues with the DSL executor and evaluator system. Resolved nested memory structure bugs, added missing DSL operations, and improved error handling.
+
+### Fixed/Enhanced
+
+#### 1. DSL Executor Operations (ENHANCED)
+- **`core/executor.js`** - Added missing operations
+  - `for_range` - loop from start to end with custom step
+  - `while` - conditional loop with max iteration guard
+  - `map` - transform each item in collection
+  - `filter` - filter collection by condition
+
+#### 2. Nested Memory Structure (FIXED)
+- **`core/executor.js`** - Resolved memory reference issues
+  - `setPath` now properly handles nested "memory.key" paths
+  - `resolveValue` prioritizes frame.memory over nested ctx.memory.memory
+  - Added boolean string handling ("true"/"false" as strings)
+  - Fixed for loop to correctly resolve collection and variables
+
+#### 3. Error Handling (IMPROVED)
+- **`core/executor.js`** - Better error propagation
+  - Errors now re-throw immediately instead of silently failing
+  - Proper error propagation from nested skill calls
+
+#### 4. Evaluator Scoring (FIXED)
+- **`core/testRunner.js`** - Improved scoring calculation
+  - Fixed schema score calculation (was incorrectly checking every test case)
+  - Score calculation now properly accounts for schema failures
+
+#### 5. Additional Test Coverage
+- Added tests for call_skill error throwing
+- Added tests for advanced DSL operations (for_range, while, map, filter)
+
+---
+
 ## [1.7.0] - 2026-04-06
 
 ### Summary

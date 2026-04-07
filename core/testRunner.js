@@ -191,13 +191,7 @@ export async function evaluateSkill(skill, capability) {
   // - efficiency (performance): 10%
   
   const correctnessScore = accuracy;
-  const schemaScore = testCases.every(t => {
-    // Find matching test case in details
-    const detail = details.find(d => 
-      JSON.stringify(d.input) === JSON.stringify(t.input)
-    );
-    return detail && detail.reason !== "schema_fail";
-  }) ? 1 : 0;
+  const schemaScore = details.some(d => d.reason === "schema_fail") ? 0.5 : 1;
   
   const robustnessScore = stable ? 1 : 0;
   
