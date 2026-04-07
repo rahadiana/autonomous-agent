@@ -1,450 +1,415 @@
-Saya sudah baca isi sistem kamu (arsitektur + file desain). Secara garis besar: **arahnya sudah benar**, tapi implementasi kamu masih di level “proto-agent”, belum “robust autonomous system”.
+Baik. Saya akan langsung treat ini sebagai **audit + redesign production-grade**, bukan sekadar saran.
 
-Saya akan langsung ke inti: **apa yang rusak, kenapa, dan bagaimana memperbaikinya (dengan kode konkret)**.
+Fokus:
 
----
-
-# 🔴 0. DIAGNOSIS KERAS (REALITY CHECK)
-
-Saat ini sistem kamu:
-
-✔ Sudah punya:
-
-* planner / executor / critic
-* DSL execution
-* skill system
-* basic learning loop
-
-❌ Tapi belum:
-
-* evaluator yang *grounded*
-* test generator yang *reliable*
-* feedback loop yang *jujur*
-* control terhadap noise (mutation / planning)
-
-👉 Artinya:
-
-> Sistem kamu **kelihatan pintar, tapi belum benar-benar belajar**
+> bikin evaluator + test generator jadi **grounded, deterministic, dan bisa dipakai untuk learning beneran**
 
 ---
 
-# 🔴 1. MASALAH PALING FATAL: EVALUATOR ITU PALSU
+# 🔴 0. MASALAH IMPLEMENTASI KAMU SEKARANG
 
-Dari desain kamu:
+Dari struktur kamu (dan file yang kamu kirim):
 
-```ts
-function evaluate(result, validation) {
-  let score = 0;
+* evaluator → heuristic (lemah)
+* test generator → hampir kosong
+* tidak ada expected output
+* tidak ada oracle
+* tidak ada dataset
 
-  if (validation.valid) score += 0.2;
-  if (result !== undefined) score += 0.4;
+👉 artinya:
 
-  score += 0.2;
-  score += 0.2;
+> agent kamu **tidak pernah tahu dia benar atau salah**
 
-  return score;
-}
+Semua learning loop kamu saat ini = **noise amplification**
+
+---
+
+# 🧠 1. DESAIN TARGET (PRODUCTION)
+
+Evaluator harus punya 4 layer:
+
+```txt
+Test Generator
+    ↓
+Executor
+    ↓
+Validator (schema)
+    ↓
+Oracle / Judge (ground truth)
+    ↓
+Scoring Engine
 ```
 
-Ini **bukan evaluator**, ini **random scoring disguised as logic**.
+---
 
-### Kenapa ini bahaya:
+# 🔧 2. STRUKTUR FILE BARU (WAJIB)
 
-* skill jelek bisa lolos
-* skill bagus bisa gagal
-* learning jadi noise
+Tambahkan ini ke project kamu:
+
+```txt
+/core/evaluation/
+  ├── evaluator.ts
+  ├── testGenerator.ts
+  ├── oracle.ts
+  ├── scorer.ts
+  ├── dataset.ts
+```
 
 ---
 
-## ✅ FIX: GROUNDED EVALUATOR (WAJIB)
+# 🔴 3. TEST GENERATOR (REAL, BUKAN DUMMY)
 
-Tambahkan **expected output + test oracle**
+## ❌ versi kamu sekarang
 
 ```ts
-function evaluateTestCase(result, expected) {
-  if (typeof expected === "object") {
-    return JSON.stringify(result) === JSON.stringify(expected);
+[{ input: {} }]
+```
+
+ini tidak ada nilai.
+
+---
+
+## ✅ REFACTOR — testGenerator.ts
+
+```ts
+import { faker } from "@faker-js/faker";
+
+export function generateTests(skill, count = 5) {
+  const tests = [];
+
+  for (let i = 0; i < count; i++) {
+    tests.push({
+      type: "normal",
+      input: generateValidInput(skill.input_schema)
+    });
   }
-  return result === expected;
-}
 
-function evaluateSkill(testResults) {
-  let pass = 0;
+  // edge case
+  tests.push({
+    type: "edge",
+    input: generateEdgeCase(skill.input_schema)
+  });
 
-  for (const t of testResults) {
-    if (evaluateTestCase(t.result, t.expected)) {
-      pass++;
-    }
-  }
+  // invalid
+  tests.push({
+    type: "invalid",
+    input: generateInvalid(skill.input_schema)
+  });
 
-  const accuracy = pass / testResults.length;
-
-  return {
-    score: accuracy,
-    valid: accuracy >= 0.8
-  };
+  return tests;
 }
 ```
 
-👉 Ini baru evaluator yang **punya makna**.
-
 ---
 
-# 🔴 2. TEST GENERATOR KAMU NGGAK ADA ISINYA
-
-Sekarang:
+## 🔧 helper
 
 ```ts
-function buildTestCases(skill) {
-  return [
-    { input: {} },
-  ];
-}
-```
-
-Ini **tidak menguji apa-apa**.
-
----
-
-## ✅ FIX: SCHEMA-DRIVEN TEST GENERATOR
-
-Gunakan schema:
-
-```ts
-function generateFromSchema(schema) {
+function generateValidInput(schema) {
   const obj = {};
 
   for (const key in schema.properties) {
-    const prop = schema.properties[key];
+    const type = schema.properties[key].type;
 
-    if (prop.type === "number") obj[key] = 1;
-    if (prop.type === "string") obj[key] = "test";
-    if (prop.type === "boolean") obj[key] = true;
+    if (type === "number") obj[key] = faker.number.int({ min: 1, max: 100 });
+    if (type === "string") obj[key] = faker.lorem.word();
+    if (type === "boolean") obj[key] = faker.datatype.boolean();
   }
 
   return obj;
 }
+```
 
-function buildTestCases(skill) {
-  const base = generateFromSchema(skill.input_schema);
+---
 
-  return [
-    {
-      input: base,
-      expected: null // nanti diisi evaluator LLM / reference
-    },
-    {
-      input: {},
-      expected: "error"
-    },
-    {
-      input: null,
-      expected: "error"
+# 🔴 4. ORACLE (INI YANG KAMU BELUM PUNYA)
+
+Tanpa oracle → tidak ada learning.
+
+---
+
+## ✅ oracle.ts
+
+```ts
+export async function computeExpected(skill, input) {
+  // 1. jika skill punya reference implementation
+  if (skill.oracle) {
+    return skill.oracle(input);
+  }
+
+  // 2. fallback: LLM judge (lebih mahal)
+  return await llmOracle(skill, input);
+}
+```
+
+---
+
+## ⚠️ IMPORTANT
+
+Minimal kamu harus support:
+
+```ts
+skill.oracle = (input) => {
+  return { result: input.a + input.b };
+};
+```
+
+👉 ini bikin evaluasi deterministic
+
+---
+
+# 🔴 5. EXECUTION + EVALUATION PIPELINE
+
+---
+
+## ✅ evaluator.ts (CORE)
+
+```ts
+import { validate } from "../validator";
+import { computeExpected } from "./oracle";
+import { scoreResults } from "./scorer";
+
+export async function evaluateSkill(skill, executor) {
+  const tests = generateTests(skill);
+
+  const results = [];
+
+  for (const t of tests) {
+    let output = null;
+    let error = null;
+
+    try {
+      output = await executor(skill, t.input);
+    } catch (e) {
+      error = e;
     }
-  ];
+
+    const schemaCheck = validate(skill.output_schema, output);
+
+    let expected = null;
+
+    if (t.type !== "invalid") {
+      expected = await computeExpected(skill, t.input);
+    }
+
+    results.push({
+      input: t.input,
+      output,
+      expected,
+      error,
+      schemaValid: schemaCheck.valid,
+      type: t.type
+    });
+  }
+
+  return scoreResults(results);
 }
 ```
 
 ---
 
-## 🔥 UPGRADE WAJIB: DUAL EVALUATION
+# 🔴 6. SCORING ENGINE (REAL METRIC)
 
-Gabungkan:
+---
 
-1. **Rule-based (deterministic)**
-2. **LLM evaluator (semantic)**
+## ❌ masalah kamu sekarang
+
+* hanya check “ada output”
+* tidak compare expected
+
+---
+
+## ✅ scorer.ts
 
 ```ts
-async function hybridEvaluate(skill, result, expected) {
-  const rule = evaluateTestCase(result, expected);
+import isEqual from "lodash.isequal";
 
-  const llmScore = await llmJudge({
-    input: skill,
-    output: result
-  });
+export function scoreResults(results) {
+  let total = 0;
 
-  return (rule ? 0.6 : 0) + (llmScore * 0.4);
+  for (const r of results) {
+    let score = 0;
+
+    // 1. schema
+    if (r.schemaValid) score += 0.2;
+
+    // 2. correctness
+    if (r.expected && isEqual(r.output, r.expected)) {
+      score += 0.5;
+    }
+
+    // 3. error handling
+    if (r.type === "invalid") {
+      if (r.error) score += 0.2;
+    } else {
+      if (!r.error) score += 0.2;
+    }
+
+    // 4. consistency (basic)
+    if (r.output !== undefined) score += 0.1;
+
+    total += score;
+  }
+
+  return total / results.length;
 }
 ```
 
 ---
 
-# 🔴 3. TIDAK ADA FAILURE MEMORY
+# 🔴 7. INTEGRASI KE PIPELINE KAMU
 
-Saat skill gagal:
-👉 kamu **buang saja**
+Dari file kamu :
 
-Ini kesalahan besar.
+## ❌ lama
+
+```ts
+const score = evaluate(lastResult, { valid: passed });
+```
 
 ---
 
-## ✅ FIX: FAILURE MEMORY
-
-Tambahkan tabel:
+## ✅ ganti jadi
 
 ```ts
-const FailureLog = sequelize.define("FailureLog", {
+const score = await evaluateSkill(skill, runSkill);
+```
+
+---
+
+# 🔴 8. REINFORCEMENT FIX
+
+Dari file kamu :
+
+## ❌ lama
+
+```ts
+const successRate = successCount / usage;
+```
+
+---
+
+## ✅ ganti
+
+```ts
+const newScore =
+  (skill.score * 0.6) +
+  (evaluationScore * 0.4);
+```
+
+---
+
+# 🔴 9. TEST DATASET (LEVEL LANJUT — WAJIB NANTI)
+
+Tambahkan:
+
+```ts
+const Dataset = sequelize.define("Dataset", {
   capability: DataTypes.STRING,
   input: DataTypes.JSON,
-  error: DataTypes.STRING,
-  created_at: DataTypes.DATE
+  expected: DataTypes.JSON
 });
 ```
 
-Hook:
+---
+
+## penggunaan:
 
 ```ts
-if (!success) {
-  await FailureLog.create({
-    capability: skill.capability,
-    input,
-    error: JSON.stringify(result)
-  });
+const dataset = await Dataset.findAll({ where: { capability } });
+
+tests.push(...dataset);
+```
+
+👉 ini bikin learning kamu makin stabil
+
+---
+
+# 🔴 10. FAILURE HANDLING (KRITIS)
+
+Tambahkan penalti:
+
+```ts
+if (error) score -= 0.3;
+```
+
+---
+
+# 🔴 11. DEBUG TRACE (WAJIB UNTUK ANALISIS)
+
+```ts
+return {
+  score,
+  results
+};
+```
+
+👉 jangan cuma return score
+
+---
+
+# 🔴 12. ANTI-CHEAT SYSTEM
+
+Tanpa ini agent bisa “curang”.
+
+Tambahkan:
+
+```ts
+if (JSON.stringify(output).includes("input")) {
+  penalty += 0.2;
 }
 ```
 
 ---
 
-## 🔥 Dampak:
+# 🧠 13. HASIL SETELAH REFACTOR
 
-* planner bisa belajar dari kegagalan
-* test generator bisa ambil edge case real
+Sebelum:
 
----
+* evaluator: fake
+* learning: ilusi
+* mutation: chaos
 
-# 🔴 4. PLANNER MASIH HALU (NO REAL CONSTRAINT)
+Sesudah:
 
-Masalah kamu:
-
-> planner generate capability yang belum tentu ada
-
-Sudah disebut di arsitektur kamu sendiri 
-
----
-
-## ✅ FIX: HARD CAPABILITY CHECK
-
-```ts
-function validatePlan(plan, availableCapabilities) {
-  for (const step of plan.steps) {
-    if (!availableCapabilities.includes(step.capability)) {
-      return false;
-    }
-  }
-  return true;
-}
-```
+* evaluator: grounded
+* learning: real signal
+* mutation: meaningful
 
 ---
 
-# 🔴 5. EXECUTOR BELUM PUNYA TRACE (INI FATAL)
+# ⚠️ REALITY CHECK
 
-Tanpa trace:
+Dengan ini:
 
-* tidak bisa debug
-* tidak bisa evaluasi step-level
-
----
-
-## ✅ FIX: EXECUTION TRACE
-
-```ts
-async function runDSL(skill, input) {
-  const ctx = { input, output: {}, trace: [] };
-
-  for (const step of skill.logic) {
-    const before = JSON.stringify(ctx);
-
-    await executeStep(step, ctx);
-
-    ctx.trace.push({
-      step,
-      state: JSON.parse(JSON.stringify(ctx))
-    });
-  }
-
-  return ctx;
-}
-```
+✔ system kamu mulai benar-benar belajar
+❌ tapi belum scalable tanpa dataset besar
 
 ---
 
-# 🔴 6. TIDAK ADA STEP-LEVEL EVALUATION
+# 🚀 NEXT STEP (SETELAH INI BERES)
 
-Semua kamu nilai di akhir.
+Kalau ini sudah stabil, lanjut:
 
-👉 Ini salah.
-
----
-
-## ✅ FIX: STEP CRITIC
-
-```ts
-function evaluateTrace(trace) {
-  const issues = [];
-
-  for (const t of trace) {
-    if (t.state.error) {
-      issues.push(`Error at step ${JSON.stringify(t.step)}`);
-    }
-  }
-
-  return issues;
-}
-```
+1. **LLM judge evaluator (grading fleksibel)**
+2. **differential testing (bandingkan skill vs skill lain)**
+3. **benchmark per capability**
+4. **reward shaping (RL style)**
 
 ---
 
-# 🔴 7. LEARNING SYSTEM BELUM “SELEKSI ALAM”
+# 🎯 PENUTUP (KRITIS)
 
-Kamu sudah punya konsep ini 
-tapi implementasi kamu belum enforce.
+Kalau kamu skip ini:
 
----
+> semua sistem kamu (planner, mutation, bandit, dll) = percuma
 
-## ✅ FIX: STRICT PROMOTION RULE
+Kalau kamu implement ini dengan benar:
 
-```ts
-if (newScore > oldScore + 0.1 && successRate > 0.8) {
-  promote();
-} else {
-  reject();
-}
-```
+> sistem kamu berubah dari “AI demo” → **learning system beneran**
 
 ---
 
-# 🔴 8. MUTATION MASIH RANDOM (INI BAHAYA)
+Kalau mau lanjut, saya bisa:
 
-Dari desain kamu :
-
-```ts
-step.op = Math.random() > 0.5 ? "add" : "subtract";
-```
-
-👉 Ini bukan learning. Ini chaos.
-
----
-
-## ✅ FIX: GUIDED MUTATION
-
-```ts
-function mutateFromFailure(skill, failureLog) {
-  const newSkill = clone(skill);
-
-  if (failureLog.error.includes("undefined")) {
-    newSkill.logic.unshift({
-      op: "validate_input"
-    });
-  }
-
-  return newSkill;
-}
-```
-
----
-
-# 🔴 9. TIDAK ADA COST CONTROL
-
-Planner kamu bisa:
-
-* generate plan panjang
-* call MCP banyak
-* burn CPU
-
----
-
-## ✅ FIX: COST MODEL
-
-```ts
-function computeCost(plan) {
-  return plan.steps.length * 1 +
-         plan.steps.filter(s => s.op === "mcp_call").length * 5;
-}
-```
-
-Gunakan di scoring:
-
-```ts
-finalScore = score - (cost * 0.05);
-```
-
----
-
-# 🔴 10. SYSTEM KAMU BELUM STABIL (NO CONTROL LOOP)
-
-Kamu sudah punya blackboard + scheduler 
-tapi belum enforce stabilitas.
-
----
-
-## ✅ FIX: GLOBAL STOP CONDITION
-
-```ts
-if (cycle > 10 || noImprovement > 3) {
-  stop("converged or stuck");
-}
-```
-
----
-
-# 🧠 RINGKASAN KRITIS
-
-## Yang harus kamu lakukan SEKARANG:
-
-### 1. WAJIB (fondasi)
-
-* perbaiki evaluator → **ground truth based**
-* perbaiki test generator → **schema + edge case**
-* tambah failure memory
-
-### 2. LEVEL 2
-
-* trace execution
-* step-level critic
-* capability validation
-
-### 3. LEVEL 3
-
-* guided mutation
-* cost-aware planning
-* strict promotion rule
-
----
-
-# 🚀 PENILAIAN JUJUR
-
-Sistem kamu sekarang:
-
-| Aspek         | Nilai |
-| ------------- | ----- |
-| Arsitektur    | 8/10  |
-| Implementasi  | 4/10  |
-| Learning loop | 3/10  |
-| Stability     | 3/10  |
-
-👉 Kesimpulan:
-
-> Ini **bukan gagal**, tapi **belum hidup**
-
----
-
-# 🎯 NEXT STEP PALING KRITIS
-
-Kalau kamu mau sistem ini benar-benar “berpikir”:
-
-👉 fokus ke:
-
-**evaluator + test generator + failure memory**
-
-Bukan nambah fitur.
-
----
-
-Kalau kamu mau, saya bisa lanjut audit lebih dalam ke:
-
-* evaluator kamu saat ini (line-by-line)
-* test generator real (LLM + rule hybrid)
-* atau bikin **benchmark system biar kamu tahu agent kamu beneran improve atau tidak**
-
-Tentukan saja.
+👉 audit langsung file evaluator kamu di repo dan rewrite full sesuai struktur ini (biar plug & play, bukan teori)
