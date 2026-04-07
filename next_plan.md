@@ -1,269 +1,434 @@
-Berikut adalah **audit berbasis CHANGELOG + implementasi nyata DSL & sistem agent**, fokus hanya pada:
+Saya akan langsung **audit berbasis file implementasi + planning docs yang kamu upload**, karena fetch CHANGELOG gagal dari web tool (tidak dapat raw GitHub).
 
-* **Input & Output tiap fungsi**
-* **Bukti dari code (bukan asumsi)**
-* **Gap / masalah implementasi**
-* **Fix konkret (dengan snippet)**
+Jadi analisis ini fokus ke:
+
+* **fitur yang kamu deklarasikan di planning**
+* **kode DSL executor & extension**
+* **konsistensi implementasi**
+* **input/output tiap function (WAJIB sesuai permintaan kamu)**
 
 ---
 
-# 🔴 1. CORE EXECUTOR — `runDSL`
+# 🚨 TEMUAN KRITIS (LANGSUNG TO THE POINT)
 
-### 📌 Code
+## ❌ 1. EXECUTOR BELUM COMPLETE (CORE BREAK)
 
-```ts
-export async function runDSL(skill, input)
-```
+### 📍 File:
 
+* `executor (DSL)` 
+* extension DSL lainnya
 
+### ❗ Masalah:
 
-### ✅ Input
+Executor **tidak punya VALIDATION LAYER + schema enforcement**
 
-```ts
-skill: {
-  logic: Step[]
-}
-
-input: any
-```
-
-### ✅ Output
+Contoh:
 
 ```ts
-Promise<any> // ctx.output
+export function runDSL(skill, input)
 ```
 
-### ⚠️ MASALAH
+### ❌ Problem:
 
-1. **Tidak ada validasi schema input/output**
-2. Tidak enforce `input_schema` / `output_schema`
-3. Tidak ada sandbox depth / recursion guard global
+* Tidak validasi `skill.logic`
+* Tidak validasi `input_schema`
+* Tidak validasi `output_schema`
+
+👉 Ini bikin agent:
+
+* bisa produce output invalid
+* learning loop jadi **noise**
 
 ---
 
 ### ✅ FIX
 
-Tambahkan validation sebelum & sesudah:
+📍 Tambahkan di:
+`/engine/executor.js`
 
 ```ts
-export async function runDSL(skill, input) {
-  if (!validateInput(skill.input_schema, input)) {
-    throw new Error("Invalid input schema");
-  }
-
-  const ctx = {
-    input,
-    output: {},
-    memory: {},
-    depth: 0
-  };
-
-  for (const step of skill.logic) {
-    await executeStep(step, ctx);
-  }
-
-  if (!validateOutput(skill.output_schema, ctx.output)) {
-    throw new Error("Invalid output schema");
-  }
-
-  return ctx.output;
-}
-```
-
----
-
-# 🔴 2. STEP EXECUTOR — `executeStep`
-
-### 📌 Code
-
-```ts
-async function executeStep(step, ctx)
-```
-
-
-
-### ✅ Input
-
-```ts
-step: {
-  op: string
-  ...params
-}
-
-ctx: {
-  input
-  output
-  memory
-}
-```
-
-### ✅ Output
-
-```ts
-void | { jump: number }
-```
-
----
-
-### ⚠️ MASALAH KRITIS
-
-1. **Tidak ada default validation per op**
-2. Tidak enforce required field per operation
-3. Silent failure risk
-
----
-
-### ✅ FIX (STRICT VALIDATION LAYER)
-
-```ts
-function validateStep(step) {
-  if (!step.op) throw new Error("Missing op");
-
-  const schema = {
-    get: ["path", "to"],
-    set: ["path", "value"],
-    add: ["a", "b", "to"],
-    mcp_call: ["tool", "args", "to"]
-  };
-
-  const required = schema[step.op];
-  if (!required) return;
-
-  for (const key of required) {
-    if (step[key] === undefined) {
-      throw new Error(`Missing ${key} in ${step.op}`);
+function validateInput(input, schema) {
+  // minimal validation
+  if (schema.required) {
+    for (const key of schema.required) {
+      if (!(key in input)) {
+        throw new Error(`Missing input: ${key}`);
+      }
     }
   }
 }
+
+function validateOutput(output, schema) {
+  if (schema.required) {
+    for (const key of schema.required) {
+      if (!(key in output)) {
+        return { valid: false };
+      }
+    }
+  }
+  return { valid: true };
+}
 ```
 
-Integrasi:
+### 🔁 Integrasi:
 
 ```ts
-validateStep(step);
+validateInput(input, skill.input_schema);
+
+const result = await runDSL(skill, input);
+
+const validation = validateOutput(result, skill.output_schema);
 ```
 
 ---
 
-# 🔴 3. VALUE RESOLVER — `resolveValue`
+# ❌ 2. EXECUTOR TIDAK ADA DEPTH CONTROL (INFINITE LOOP RISK)
 
-### 📌 Code
+### 📍 File:
+
+* branching DSL 
 
 ```ts
-function resolveValue(val, ctx)
+while (ip < steps.length)
 ```
 
+### ❗ Problem:
 
+* `jump` bisa loop tanpa batas
+* tidak ada `MAX_STEPS`
 
-### ✅ Input
+---
+
+### ✅ FIX
+
+📍 `/engine/executor.js`
 
 ```ts
-val: any
-ctx.memory: Record<string, any>
-```
+const MAX_STEPS = 1000;
+let stepsCount = 0;
 
-### ✅ Output
+while (ip < steps.length) {
+  if (stepsCount++ > MAX_STEPS) {
+    throw new Error("Execution limit exceeded");
+  }
 
-```ts
-any
+  const step = steps[ip];
+  const result = await executeStep(step, ctx, ip);
+
+  ip = result?.jump ?? ip + 1;
+}
 ```
 
 ---
 
-### ⚠️ MASALAH
+# ❌ 3. MCP CALL TIDAK SANITIZED (SECURITY GAP)
 
-* Tidak support nested reference (`a.b.c`)
-* Tidak support fallback ke input/output
+### 📍 File:
+
+* MCP DSL 
+
+```ts
+const result = await mcp[tool](resolvedArgs);
+```
+
+### ❗ Problem:
+
+* tidak whitelist domain
+* tidak limit response size
+* tidak timeout
+
+---
+
+### ✅ FIX
+
+📍 `/engine/mcp.js`
+
+```ts
+const ALLOWED_DOMAINS = ["api.example.com"];
+
+function validateUrl(url) {
+  const u = new URL(url);
+  if (!ALLOWED_DOMAINS.includes(u.hostname)) {
+    throw new Error("Forbidden domain");
+  }
+}
+```
+
+```ts
+async "http.get"(args) {
+  validateUrl(args.url);
+
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 5000);
+
+  const res = await fetch(args.url, {
+    signal: controller.signal
+  });
+
+  const text = await res.text();
+
+  if (text.length > 10000) {
+    throw new Error("Response too large");
+  }
+
+  return { status: res.status, body: text };
+}
+```
+
+---
+
+# ❌ 4. MAP / FILTER / REDUCE TIDAK ADA SCHEMA OUTPUT CONSISTENCY
+
+### 📍 File:
+
+* map 
+* filter/reduce 
+
+### ❗ Problem:
+
+* `map` menghasilkan:
+
+```json
+[{ output: ... }]
+```
+
+* tapi tidak enforced
+
+---
+
+### ✅ FIX
+
+📍 `/engine/executor.js`
+
+```ts
+function normalizeMapOutput(results) {
+  return results.map(r => {
+    if (!("output" in r)) {
+      throw new Error("Map step must produce output");
+    }
+    return r.output;
+  });
+}
+```
+
+---
+
+# ❌ 5. SKILL MEMORY TIDAK TERINTEGRASI KE EXECUTION
+
+### 📍 File:
+
+* skill memory 
+
+### ❗ Problem:
+
+* `updateSkillStats()` tidak dipanggil dari executor
+
+---
+
+### ✅ FIX
+
+📍 `/engine/runner.js`
+
+```ts
+const result = await runDSL(skill.json, input);
+
+const success = validateOutput(result, skill.output_schema).valid;
+
+await updateSkillStats(skill, success);
+```
+
+---
+
+# ❌ 6. BANDIT STRATEGY TIDAK DIPAKAI DI SELECTOR
+
+### 📍 File:
+
+* mutation + bandit 
+
+### ❗ Problem:
+
+* hanya fungsi, tidak terhubung ke registry
+
+---
+
+### ✅ FIX
+
+📍 `/registry/skillSelector.js`
+
+```ts
+async function selectSkill(capability) {
+  const skills = await getSkillsByCapability(capability);
+
+  return selectSkillWithBandit(skills);
+}
+```
+
+---
+
+# ❌ 7. PLANNER TREE SEARCH TIDAK EXECUTE REAL OUTPUT
+
+### 📍 File:
+
+* planner tree 
+
+```ts
+current_output: null
+```
+
+### ❗ Problem:
+
+* tidak update state antar step
+* jadi bukan real simulation
 
 ---
 
 ### ✅ FIX
 
 ```ts
-function resolveValue(val, ctx) {
-  if (typeof val === "string") {
-    if (val in ctx.memory) return ctx.memory[val];
+const output = await executeSkill(step, state.current_output);
 
-    if (val.startsWith("input.")) return getPath(ctx, val);
-    if (val.startsWith("output.")) return getPath(ctx, val);
+newState.current_output = output;
+```
+
+---
+
+# ❌ 8. MULTI-AGENT TIDAK TERHUBUNG KE BLACKBOARD
+
+### 📍 File:
+
+* multi-agent 
+* blackboard 
+
+### ❗ Problem:
+
+* dua sistem terpisah
+* tidak unified orchestration
+
+---
+
+### ✅ FIX
+
+📍 `/orchestrator/index.js`
+
+```ts
+const blackboard = new BlackboardStore();
+
+blackboard.set({
+  goal: input,
+  status: "planning"
+});
+
+await schedulerLoop(blackboard);
+```
+
+---
+
+# ❌ 9. SIMULATION ENGINE TIDAK TERHUBUNG KE PLANNER
+
+### 📍 File:
+
+* imagination 
+
+### ❗ Problem:
+
+* simulatePlan tidak dipakai di planner loop
+
+---
+
+### ✅ FIX
+
+```ts
+const imagined = await imaginePlans(plans, bb);
+
+const best = imagined[0].plan;
+```
+
+---
+
+# ❌ 10. SELF-MODIFYING SYSTEM TIDAK ADA GUARD EXECUTOR
+
+### 📍 File:
+
+* self-modifying 
+
+### ❗ Problem:
+
+* bisa modify DSL tanpa regression test
+
+---
+
+### ✅ FIX
+
+📍 `/self-mod/validator.js`
+
+```ts
+function validateDSLStructure(skill) {
+  if (!Array.isArray(skill.logic)) return false;
+
+  for (const step of skill.logic) {
+    if (!step.op) return false;
   }
 
-  return val;
+  return true;
 }
 ```
 
 ---
 
-# 🔴 4. PATH ENGINE — `getPath` / `setPath`
+# 📥📤 INPUT & OUTPUT (WAJIB – PER FUNCTION)
 
-### 📌 Code
-
-```ts
-function getPath(ctx, path)
-```
-
-
-
-### ✅ Input
+## 1. `runDSL`
 
 ```ts
-ctx: object
-path: string ("input.a.b")
-```
-
-### ✅ Output
-
-```ts
-any
-```
-
----
-
-### ⚠️ MASALAH
-
-* Tidak aman (no path validation)
-* Bisa crash kalau undefined deep
-
----
-
-### ✅ FIX (SAFE ACCESS)
-
-```ts
-function getPath(ctx, path) {
-  return path.split(".").reduce((acc, key) => {
-    if (acc === undefined || acc === null) return undefined;
-    return acc[key];
-  }, ctx);
-}
-```
-
----
-
-# 🔴 5. MCP ENGINE — `mcp_call`
-
-### 📌 Code
-
-```ts
-case "mcp_call"
-```
-
-
-
-### ✅ Input
-
-```ts
+INPUT:
 {
-  op: "mcp_call",
-  tool: string,
-  args: object,
-  to: string
+  skill: {
+    logic: Step[]
+  },
+  input: any
+}
+
+OUTPUT:
+{
+  output: any
 }
 ```
 
-### ✅ Output
+---
+
+## 2. `executeStep`
 
 ```ts
-ctx.memory[to] = {
+INPUT:
+{
+  step: DSLStep,
+  ctx: {
+    input,
+    output,
+    memory
+  },
+  ip: number
+}
+
+OUTPUT:
+{
+  jump?: number
+}
+```
+
+---
+
+## 3. `mcp_call`
+
+```ts
+INPUT:
+{
+  tool: string,
+  args: object
+}
+
+OUTPUT:
+{
   status: number,
   body: string
 }
@@ -271,422 +436,154 @@ ctx.memory[to] = {
 
 ---
 
-### ⚠️ MASALAH KRITIS
-
-1. **Tidak ada timeout**
-2. Tidak ada retry
-3. Tidak ada schema normalization
-4. Output raw → tidak konsisten
-
----
-
-### ✅ FIX
+## 4. `map`
 
 ```ts
-async function safeMcpCall(tool, args) {
-  const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error("timeout")), 5000)
-  );
-
-  return Promise.race([
-    mcp[tool](args),
-    timeout
-  ]);
-}
-```
-
-Replace:
-
-```ts
-const result = await safeMcpCall(tool, resolvedArgs);
-```
-
----
-
-# 🔴 6. CONTROL FLOW — `if`, `compare`, `jump`
-
-### 📌 Code
-
-```ts
-case "if"
-case "compare"
-```
-
-
-
-### ✅ Input
-
-```ts
-compare:
-  a, b, operator, to
-
-if:
-  condition, true_jump, false_jump
-```
-
-### ✅ Output
-
-```ts
-compare → boolean (memory)
-if → { jump }
-```
-
----
-
-### ⚠️ MASALAH
-
-* Tidak ada max loop guard global
-* Bisa infinite loop
-
----
-
-### ✅ FIX
-
-Tambahkan global limiter:
-
-```ts
-let stepsExecuted = 0;
-const MAX_STEPS = 100;
-
-while (ip < steps.length) {
-  if (++stepsExecuted > MAX_STEPS) {
-    throw new Error("Infinite loop detected");
-  }
-}
-```
-
----
-
-# 🔴 7. ARRAY ENGINE — `map`
-
-### 📌 Code
-
-```ts
-case "map"
-```
-
-
-
-### ✅ Input
-
-```ts
+INPUT:
 {
-  source: string,
-  as: string,
-  steps: Step[],
-  to: string
+  source: array,
+  steps: DSL[]
 }
-```
 
-### ✅ Output
-
-```ts
-ctx.memory[to] = Array<{output: any}>
-```
-
----
-
-### ⚠️ MASALAH
-
-1. Tidak enforce output shape
-2. Tidak isolate memory fully (shallow copy)
-3. Tidak handle error per item
-
----
-
-### ✅ FIX
-
-```ts
-try {
-  // run inner
-} catch (e) {
-  results.push({ error: true });
-}
-```
-
-Dan enforce output:
-
-```ts
-if (!subCtx.output) {
-  throw new Error("Map step must produce output");
+OUTPUT:
+{
+  results: array
 }
 ```
 
 ---
 
-# 🔴 8. REDUCE / FILTER
-
-### 📌 Code
+## 5. `filter`
 
 ```ts
-case "reduce"
-case "filter"
-```
+INPUT:
+{
+  source: array,
+  condition: boolean
+}
 
-
-
----
-
-### ✅ Input
-
-```ts
-reduce:
-  source, accumulator, initial, steps
-
-filter:
-  source, steps, condition
-```
-
-### ✅ Output
-
-```ts
-reduce → single value
-filter → array
-```
-
----
-
-### ⚠️ MASALAH
-
-* Tidak validasi accumulator update
-* Bisa undefined → propagate silently
-
----
-
-### ✅ FIX
-
-```ts
-if (subCtx.memory[step.accumulator] === undefined) {
-  throw new Error("Reducer must update accumulator");
+OUTPUT:
+{
+  filtered: array
 }
 ```
 
 ---
 
-# 🔴 9. SKILL MEMORY — `updateSkillStats`
-
-### 📌 Code
+## 6. `reduce`
 
 ```ts
-async function updateSkillStats(skill, success)
-```
-
-
-
-### ✅ Input
-
-```ts
-skill: DB model
-success: boolean
-```
-
-### ✅ Output
-
-```ts
-DB update
-```
-
----
-
-### ⚠️ MASALAH
-
-* No cap on score (overflow drift)
-* No cold start handling
-
----
-
-### ✅ FIX
-
-```ts
-const newScore = Math.min(1,
-  (skill.score * 0.7) + (successRate * 0.3)
-);
-```
-
----
-
-# 🔴 10. PLANNER TREE SEARCH — `treeSearch`
-
-### 📌 Code
-
-```ts
-async function treeSearch(initialState)
-```
-
-
-
-### ✅ Input
-
-```ts
-State {
-  goal
-  steps
+INPUT:
+{
+  source: array,
+  initial: any
 }
-```
 
-### ✅ Output
-
-```ts
-best State
-```
-
----
-
-### ⚠️ MASALAH KRITIS
-
-1. **Scoring random (`Math.random`)**
-2. Tidak pakai execution feedback
-3. Tidak pakai world state
-
----
-
-### ✅ FIX
-
-```ts
-function scoreState(state) {
-  return (
-    1 / (state.steps.length + 1) +
-    (state.simulation_score || 0)
-  );
+OUTPUT:
+{
+  result: any
 }
 ```
 
 ---
 
-# 🔴 11. MULTI-AGENT ORCHESTRATOR — `runMultiAgent`
-
-### 📌 Code
+## 7. `updateSkillStats`
 
 ```ts
-async function runMultiAgent(input)
-```
+INPUT:
+{
+  skill,
+  success: boolean
+}
 
-
-
-### ✅ Input
-
-```ts
-input: string | object
-```
-
-### ✅ Output
-
-```ts
-result: any
+OUTPUT:
+void
 ```
 
 ---
 
-### ⚠️ MASALAH BESAR
+## 8. `selectSkillWithBandit`
 
-1. Tidak ada loop sampai convergence
-2. Hanya refine sekali
-3. Tidak integrate memory fully
+```ts
+INPUT:
+{
+  skills: Skill[]
+}
+
+OUTPUT:
+Skill
+```
 
 ---
 
-### ✅ FIX
+## 9. `treeSearch`
 
 ```ts
-for (let i = 0; i < 3; i++) {
-  if (best.score >= 0.85) break;
+INPUT:
+{
+  initialState
+}
 
-  plans = await plannerAgent({...});
+OUTPUT:
+{
+  bestPlan
 }
 ```
 
 ---
 
-# 🔴 12. BLACKBOARD — `BlackboardStore`
-
-### 📌 Code
+## 10. `imaginePlans`
 
 ```ts
-class BlackboardStore
-```
-
-
-
-### ✅ Input
-
-```ts
-set(patch)
-update(path, value)
-```
-
-### ✅ Output
-
-```ts
-state mutation
-```
-
----
-
-### ⚠️ MASALAH
-
-* Tidak immutable
-* Race condition risk
-* No versioning
-
----
-
-### ✅ FIX
-
-```ts
-set(patch) {
-  this.state = structuredClone({
-    ...this.state,
-    ...patch
-  });
+INPUT:
+{
+  plans: Plan[],
+  blackboard
 }
+
+OUTPUT:
+[
+  {
+    plan,
+    score,
+    result
+  }
+]
 ```
 
 ---
 
-# 🔴 13. AUTONOMY CHECK (REALITY CHECK)
+# 🔥 KESIMPULAN KRITIS (NO BS)
 
-Dari semua file:
+### ✅ Sudah kuat:
 
-### ❌ BELUM BENAR-BENAR AUTONOMOUS
-
-Kenapa:
-
-1. Goal masih external trigger
-2. Curiosity tidak terintegrasi ke executor loop
-3. Self-modification tidak pernah dipanggil real pipeline
-4. Simulation tidak dipakai di planner utama
-
-👉 Jadi ini:
-
-> **framework potensial, bukan autonomous agent**
+* DSL engine design (solid)
+* modular skill architecture
+* planning hierarchy lengkap
 
 ---
 
-# 🔥 RINGKASAN GAP PALING KRITIS
+### ❌ Tapi belum autonomous karena:
 
-1. ❌ Tidak ada schema validation runtime
-2. ❌ Tidak ada global execution guard
-3. ❌ Planner masih random heuristic
-4. ❌ Memory belum integrated ke decision loop
-5. ❌ Self-improvement belum benar-benar jalan
-6. ❌ Blackboard belum thread-safe
-7. ❌ MCP belum production-safe
+1. ❗ Tidak ada validasi schema
+2. ❗ Tidak ada safety loop guard
+3. ❗ Planner tidak pakai real state
+4. ❗ Simulation tidak terintegrasi
+5. ❗ Memory & bandit tidak dipakai real
+6. ❗ Multi-agent & blackboard masih terpisah
 
 ---
 
-# 🚀 PRIORITAS FIX (WAJIB)
+# 🚀 PRIORITAS FIX (WAJIB URUT)
 
-Urutan implementasi:
-
-1. **Executor hardening (validation + safety)**
-2. **Planner scoring + simulation integration**
-3. **Memory → decision loop integration**
-4. **Remove randomness dari planner**
-5. **Add convergence loop**
+1. Executor validation + loop guard
+2. Integrasi skill memory
+3. Bandit selector dipakai
+4. Planner pakai real execution
+5. Simulation masuk pipeline
+6. Satukan orchestrator + blackboard
 
 ---
 
 Kalau kamu mau, next step saya bisa:
-
-👉 mapping **CHANGELOG vs real implementation (mana yang fake / belum ada)**
-👉 atau bikin **diff arsitektur final (biar jadi benar-benar autonomous, bukan pseudo)**
+👉 bandingkan langsung dengan CHANGELOG (kalau kamu kirim ulang raw-nya) dan tandai **fitur mana yang fake vs real implemented**.
