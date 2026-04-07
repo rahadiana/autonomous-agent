@@ -1,77 +1,80 @@
 # CHANGELOG
 
-## 2026-04-07 - Initial Implementation
+## 2026-04-07 - MARKDOWN_PLAN/2 Implementation
 
-### Components Created
+### New Components Created
 
-#### 1. Database (db.js)
-- JSON-based skill registry storage
-- File: `./data/skills.json`
+#### 1. Capability Matcher (services/capabilityMatcher.js)
+- Deterministic capability matching
+- Functions: normalizeCapability, findSkill, matchCapability
 
 **Test Input:**
 ```js
-{ name: "test_skill", capability: "test.add", json: { logic: "output.result = 1;" } }
+{ capability: "  MATH.ADD  " }
 ```
 **Test Output:**
 ```js
-{ id: "uuid", name: "test_skill", capability: "test.add", json: {...}, score: 0, created_at: "..." }
+"math.add"
+```
+
+**Find Skill Input:**
+```js
+{ capability: "math.add" }
+```
+**Find Skill Output:**
+```js
+{ id: "test-id-1", name: "add_skill", capability: "math.add", json: {...} }
+```
+
+**Match Capability Input:**
+```js
+{ capability: "math.subtract" }
+```
+**Match Capability Output:**
+```js
+{ match: {...}, type: "exact" }
 ```
 **Status:** PASS (3/3 tests)
 
 ---
 
-#### 2. Executor (services/executor.js)
-- DSL interpreter with sandbox mode (VM)
-- Supports skill logic execution
+#### 2. Validator (services/validator.js)
+- Schema validation using AJV
+- Functions: validate, validateInput, validateOutput
 
 **Test Input:**
 ```js
-{ logic: "output.result = input.a + input.b;", input: { a: 5, b: 3 } }
+{ schema: { type: "object", properties: { result: { type: "number" } }, required: ["result"] }, data: { result: 5 } }
 ```
 **Test Output:**
 ```js
-{ result: 8 }
+{ valid: true, errors: [] }
 ```
-**Sandbox Input:**
+
+**Invalid Data Input:**
 ```js
-{ logic: "output.result = input.value * 2;", input: { value: 5 } }
+{ schema: { type: "object", properties: { result: { type: "number" } }, required: ["result"] }, data: { result: "not a number" } }
 ```
-**Sandbox Output:**
+**Invalid Data Output:**
 ```js
-{ result: 10 }
+{ valid: false, errors: [...] }
 ```
-**Status:** PASS (3/3 tests)
+
+**Null Schema Input:**
+```js
+{ schema: null, data: { test: true } }
+```
+**Null Schema Output:**
+```js
+{ valid: true, errors: [] }
+```
+**Status:** PASS (4/4 tests)
 
 ---
 
-#### 3. MCP Wrapper (services/mcpWrapper.js)
-- HTTP client (get/post)
-- File system operations
-- JSON tools
-
-**Test Input:**
-```js
-{ tool: "custom.add", params: { a: 2, b: 3 } }
-```
-**Test Output:**
-```js
-5
-```
-**JSON Test Input:**
-```js
-{ key: "value", num: 123 }
-```
-**JSON Test Output:**
-```js
-{ key: "value", num: 123 }
-```
-**Status:** PASS (3/3 tests)
-
----
-
-#### 4. Test Runner (services/testRunner.js)
-- Auto-generate test cases
-- Evaluate results with scoring
+#### 3. Test Builder (services/testBuilder.js)
+- Auto-generate test cases for skills
+- Functions: buildTestCases, buildEdgeCases
 
 **Test Input:**
 ```js
@@ -79,39 +82,76 @@
 ```
 **Test Output:**
 ```js
-[{ input: { a: 2, b: 3 }, expected: { result: 5 } }, ...]
+[{ input: { a: 2, b: 3 }, expected: { result: 5 } }, { input: { a: -1, b: 1 }, expected: { result: 0 } }, ...]
 ```
-**Evaluation Input:**
+
+**Unknown Capability Input:**
 ```js
-[{ passed: true }, { passed: true }, { passed: false }]
+{ capability: "unknown.skill" }
 ```
-**Evaluation Output:**
+**Unknown Capability Output:**
 ```js
-{ score: 0.666, passed: 2, total: 3, valid: false }
+[{ input: {}, expected: {} }]
 ```
-**Status:** PASS (3/3 tests)
+
+**Edge Cases Input:**
+```js
+{ capability: "math.add" }
+```
+**Edge Cases Output:**
+```js
+[{ input: {}, expected: null }, { input: null, expected: null }]
+```
+**Status:** PASS (5/5 tests)
 
 ---
 
-#### 5. Skill Model (models/skill.js)
-- Wrapper for DB operations
-- CRUD for skills
+#### 4. Evaluator (services/evaluator.js)
+- Real score evaluation with weights
+- Functions: evaluate, shouldAccept, canRetry
 
 **Test Input:**
 ```js
-{ name: "wrap_test", capability: "wrap.test", json: { logic: "output.r = 1;" } }
+{ result: { result: 5 }, validation: { valid: true }, skill: { name: "test", capability: "math.add", logic: "..." } }
 ```
 **Test Output:**
 ```js
-{ id: "uuid", name: "wrap_test", capability: "wrap.test", json: {...} }
+{ score: 0.84, passed: true, breakdown: { correctness: 0.4, schema: 0.2, reuse: 0.12, efficiency: 0.12 } }
 ```
-**Status:** PASS (1/1 tests)
+
+**Invalid Schema Input:**
+```js
+{ result: { result: 5 }, validation: { valid: false, errors: ["error"] }, skill: { name: "test", capability: "math.add", logic: "..." } }
+```
+**Invalid Schema Output:**
+```js
+{ score: 0.72, passed: false, ... }
+```
+
+**Threshold Check Input:**
+```js
+{ score: 0.9 }
+```
+**Threshold Check Output:**
+```js
+true
+```
+
+**Retry Condition Input:**
+```js
+{ iteration: 3 }
+```
+**Retry Condition Output:**
+```js
+false
+```
+**Status:** PASS (4/4 tests)
 
 ---
 
 ### Summary
-- Total Tests: 13
-- Passed: 13
+- Total Tests: 29
+- Passed: 29
 - Failed: 0
 
 All tests passing.

@@ -1,12 +1,12 @@
 [
   {
-    "id": "2125013d-7b6c-47ca-9a8d-07a7dd83a037",
+    "id": "66f76a8d-0472-4475-a767-5baf04605160",
     "name": "wrap_test",
     "capability": "wrap.test",
     "json": {
       "logic": "output.r = 1;"
     },
     "score": 0,
-    "created_at": "2026-04-07T18:27:46.857Z"
+    "created_at": "2026-04-07T18:56:27.530Z"
   }
 ]
