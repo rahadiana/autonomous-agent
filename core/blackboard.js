@@ -241,6 +241,19 @@ export class Blackboard {
     return zone ? zone.version : -1;
   }
 
+  safeSet(zoneName, patch, expectedVersion, writer) {
+    const zone = this.zones.get(zoneName);
+    if (!zone) {
+      throw new Error(`Zone not found: ${zoneName}`);
+    }
+
+    if (zone.version !== expectedVersion) {
+      throw new Error(`State conflict: expected version ${expectedVersion}, got ${zone.version}`);
+    }
+
+    return this.write(zoneName, patch, writer);
+  }
+
   hasChanged(zoneName, lastKnownVersion) {
     return this.getZoneVersion(zoneName) > lastKnownVersion;
   }

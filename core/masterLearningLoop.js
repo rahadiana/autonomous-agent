@@ -12,13 +12,77 @@
  */
 
 import { IntegratedPlanner } from "./integratedPlanner.js";
-import { UnifiedExecutor } from "./unifiedExecutor.js";
+import { UnifiedExecutor, validatePlan } from "./unifiedExecutor.js";
 import { UnifiedEvaluator } from "./unifiedEvaluator.js";
 import { LearningPhase } from "./learningPhase.js";
 import { PlanSelector } from "./planSelector.js";
 import { EpisodicMemory } from "./episodicMemory.js";
 import { SkillRegistry } from "./skillRegistry.js";
 import { createBlackboard } from "./blackboard.js";
+
+/**
+ * Global Learning Loop - Integrated into master loop
+ * 
+ * @param {Object} params - { plan, result, evaluation, skillRegistry }
+ * @returns {Object} - Learning feedback
+ */
+export async function globalLearning({ plan, result, evaluation, skillRegistry }) {
+  const learningFeedback = {
+    updated: false,
+    reinforced: false,
+    failed: false,
+    actions: []
+  };
+
+  if (!skillRegistry) {
+    return learningFeedback;
+  }
+
+  try {
+    const capability = plan.capability || plan.bestPath?.[0]?.capability;
+    if (!capability) {
+      return learningFeedback;
+    }
+
+    const skill = skillRegistry.get(capability);
+    
+    if (!evaluation.valid || evaluation.score < 0.5) {
+      learningFeedback.failed = true;
+      learningFeedback.actions.push({
+        type: "log_failure",
+        capability,
+        score: evaluation.score,
+        error: result.error
+      });
+
+      if (skill) {
+        skill.failure_count = (skill.failure_count || 0) + 1;
+      }
+    }
+
+    if (evaluation.valid && evaluation.score >= 0.85) {
+      learningFeedback.reinforced = true;
+      learningFeedback.actions.push({
+        type: "reinforce",
+        capability,
+        score: evaluation.score
+      });
+
+      if (skill) {
+        skill.success_count = (skill.success_count || 0) + 1;
+        skill.score = Math.min(1, (skill.score || 0.5) + 0.05);
+        skill.usage_count = (skill.usage_count || 0) + 1;
+      }
+    }
+
+    learningFeedback.updated = true;
+
+  } catch (error) {
+    console.error("[GLOBAL LEARNING] Error:", error.message);
+  }
+
+  return learningFeedback;
+}
 
 /**
  * Konfigurasi utama master loop
@@ -156,7 +220,8 @@ export async function masterLoop(input, options = {}) {
       const execContext = { 
         ...state.context, 
         goal: currentGoal,
-        capability: selectedPlan.capability
+        capability: selectedPlan.capability,
+        capabilities: skillRegistry.list().map(s => s.capability)
       };
       let execResult;
       try {
@@ -178,6 +243,17 @@ export async function masterLoop(input, options = {}) {
 
       console.log(`[MASTER LOOP] Evaluation score: ${evaluation.score.toFixed(3)}`);
       await blackboard.write("evaluation", evaluation, "master_loop");
+
+      // PHASE 6.5: Global Learning Loop (update skill stats)
+      const globalFeedback = await globalLearning({
+        plan: selectedPlan,
+        result: execResult,
+        evaluation,
+        skillRegistry
+      });
+      if (globalFeedback.updated) {
+        console.log(`[MASTER LOOP] Global learning: reinforced=${globalFeedback.reinforced}, failed=${globalFeedback.failed}`);
+      }
 
       // Update state
       state.updateScore(evaluation.score);

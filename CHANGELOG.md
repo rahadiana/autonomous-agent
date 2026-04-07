@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-04-07
+
+### Added
+- **Unified Contract** - Added AgentMessage type for consistent data format across all agents (planner, executor, critic)
+- **Plan Validation** - Executor now validates plan capabilities before execution to prevent hallucination
+- **Safe Set (Atomic Updates)** - Blackboard now supports safeSet with version checking to prevent race conditions
+- **Global Learning Loop** - Integrated global learning that updates skill stats (success/failure counts) based on evaluation results
+
+### Improved
+- Global learning loop reinforces skills with score >= 0.85 and logs failures below 0.5
+- Plan validation checks capability against available skills before execution
+- Executor context now includes full capabilities list for validation
+
 ## [1.1.0] - 2026-04-07
 
 ### Added

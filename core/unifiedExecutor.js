@@ -13,6 +13,29 @@ import { runSkill } from "./executor.js";
 import { callTool as runMCP, mcp } from "./mcp.js";
 
 /**
+ * Validate plan before execution - prevents hallucination
+ */
+export function validatePlan(plan, capabilities = []) {
+  if (!plan) {
+    return { valid: false, error: "Plan is null or undefined" };
+  }
+
+  if (!plan.capability && !plan.skill && !plan.bestPath) {
+    return { valid: false, error: "Plan has no capability, skill, or bestPath" };
+  }
+
+  const planCapability = plan.capability || plan.bestPath?.[0]?.capability;
+  
+  if (planCapability && capabilities.length > 0) {
+    if (!capabilities.includes(planCapability)) {
+      return { valid: false, error: `Capability '${planCapability}' not in available capabilities` };
+    }
+  }
+
+  return { valid: true };
+}
+
+/**
  * Executor Configuration
  */
 export const UNIFIED_EXECUTOR_CONFIG = {
@@ -212,6 +235,13 @@ export class UnifiedExecutor {
     const startTime = Date.now();
 
     try {
+      // Validate plan before execution
+      const capabilities = context.capabilities || [];
+      const validation = validatePlan(plan, capabilities);
+      if (!validation.valid) {
+        throw new Error(`Plan validation failed: ${validation.error}`);
+      }
+
       // Determine execution type
       const execType = this.determineExecutionType(plan);
       console.log("[UNIFIED EXECUTOR] Execution type:", execType);
