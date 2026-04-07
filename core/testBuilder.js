@@ -96,3 +96,70 @@ export function buildRandomFuzz(skill, count = 5) {
 
   return tests;
 }
+
+export async function testSkill(skill, runDSL) {
+  const tests = buildTestCases(skill);
+
+  let passed = 0;
+  const failures = [];
+
+  for (const t of tests) {
+    try {
+      const res = await runDSL(skill, t.input);
+
+      if (skill.output_schema) {
+        const valid = validateSkillOutput(skill.output_schema, res);
+        if (valid) {
+          passed++;
+        } else {
+          failures.push({ input: t.input, res, errors: valid.errors });
+        }
+      } else {
+        passed++;
+      }
+    } catch (e) {
+      failures.push({ input: t.input, error: e.message });
+    }
+  }
+
+  return {
+    passRate: passed / tests.length,
+    passed,
+    total: tests.length,
+    failures
+  };
+}
+
+function validateSkillOutput(schema, output) {
+  const errors = [];
+  
+  if (schema.required) {
+    for (const field of schema.required) {
+      if (output[field] === undefined) {
+        errors.push(`Missing required field: ${field}`);
+      }
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors
+  };
+}
+
+export function logFailureDetails(failures) {
+  if (failures.length === 0) {
+    return "No failures";
+  }
+  
+  return failures.map((f, i) => {
+    let detail = `Test ${i + 1}:`;
+    if (f.error) {
+      detail += ` Error: ${f.error}`;
+    } else if (f.errors) {
+      detail += ` Errors: ${f.errors.join(", ")}`;
+    }
+    detail += ` Input: ${JSON.stringify(f.input)}`;
+    return detail;
+  }).join("\n");
+}

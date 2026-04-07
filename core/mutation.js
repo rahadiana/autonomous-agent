@@ -277,6 +277,43 @@ export function mutateSkillWithFeedback(skill, feedback = "") {
   return newSkill;
 }
 
+export function mutateFromFailure(skill, failures) {
+  const newSkill = JSON.parse(JSON.stringify(skill));
+
+  if (failures.length === 0) return newSkill;
+
+  const firstFailure = failures[0];
+  const errorMsg = firstFailure.error || "";
+
+  if (errorMsg.includes("timeout") || errorMsg.includes("timeout")) {
+    for (const step of newSkill.logic) {
+      if (step.op === "for" || step.op === "while") {
+        step.maxLoops = (step.maxLoops || 1000) / 2;
+      }
+    }
+  }
+
+  if (errorMsg.includes("missing") || errorMsg.includes("undefined")) {
+    for (const step of newSkill.logic) {
+      if (step.op === "get" && step.path) {
+        step.default = step.default ?? null;
+      }
+    }
+  }
+
+  if (errorMsg.includes("schema") || errorMsg.includes("validation")) {
+    if (newSkill.logic.length > 0 && newSkill.logic[0].op === "set") {
+      newSkill.logic.unshift({
+        op: "set",
+        path: "_validated",
+        value: true
+      });
+    }
+  }
+
+  return newSkill;
+}
+
 /**
  * Get mutation config (for testing/debugging)
  */
