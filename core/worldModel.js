@@ -1,3 +1,5 @@
+import { runSkill } from "./executor.js";
+
 export class WorldModel {
   constructor() {
     this.belief = {
@@ -60,13 +62,36 @@ export class Simulation {
   async simulate(plan, blackboard) {
     let score = 0.5;
     const steps = plan.steps || [];
-    
-    for (const step of steps.slice(0, this.maxSteps) ) {
-      const prediction = await this.worldModel.predict(step, blackboard.getZoneData("context"));
-      score *= prediction.confidence;
+    const simInput = blackboard.getZoneData("context") || {};
+    const isSimulation = true;
+
+    for (const step of steps.slice(0, this.maxSteps)) {
+      try {
+        const result = await this.simulateStep(step, { ...simInput, __mode: "simulation" });
+        const prediction = await this.worldModel.predict(step, simInput);
+        score *= prediction.confidence;
+      } catch (e) {
+        score *= 0.5;
+      }
     }
 
     return { score, steps: steps.length };
+  }
+
+  async simulateStep(step, simContext) {
+    if (!step) return { error: "no step" };
+
+    if (step.op === "mcp_call") {
+      return { mock: true, tool: step.tool };
+    }
+
+    if (step.op === "call_skill") {
+      const skill = step.skill || {};
+      const mockResult = { mock: true, skill: skill.capability || step.capability };
+      return mockResult;
+    }
+
+    return runSkill({ logic: [step] }, simContext, { isSimulation: true });
   }
 }
 

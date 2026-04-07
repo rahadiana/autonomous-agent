@@ -17,20 +17,20 @@ export class ControlScheduler {
     this.currentAgent = null;
   }
 
-  registerAgent(name, handler) {
-    this.agents.set(name, handler);
+  registerAgent(name, handler, priority = 50) {
+    this.agents.set(name, { handler, priority });
   }
 
   async selectAgent() {
     const currentStatus = this.blackboard.getStatus();
     
     const agentPriority = {
-      [Status.PLANNING]: ["planner"],
+      [Status.PLANNING]: ["planner", "imagination", "goal_manager"],
       [Status.EXECUTING]: ["executor"],
       [Status.CRITIC]: ["critic"],
       [Status.RETRY]: ["executor", "planner"],
-      [Status.ERROR]: ["recovery"],
-      [Status.DONE]: []
+      [Status.ERROR]: ["recovery", "goal_manager"],
+      [Status.DONE]: ["goal_manager"]
     };
 
     const priorities = agentPriority[currentStatus] || [];
@@ -62,11 +62,11 @@ export class ControlScheduler {
         break;
       }
 
-      const agent = this.agents.get(agentName);
+      const agentObj = this.agents.get(agentName);
       this.currentAgent = agentName;
 
       try {
-        await agent(this.blackboard);
+        await agentObj.handler(this.blackboard);
       } catch (err) {
         this.blackboard.setStatus(Status.ERROR, err.message);
       }

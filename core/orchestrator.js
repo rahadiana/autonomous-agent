@@ -4,6 +4,13 @@ import { runSkill, executeSkill } from "./executor.js";
 import { selectSkill, banditScore } from "./bandit.js";
 import { shouldMutate, mutateSkill, acceptMutation, mutateFromFailure } from "./mutation.js";
 import { createVersion } from "./versioning.js";
+import { MetaReasoningLayer } from "./metaReasoning.js";
+
+const globalConfig = {
+  beam_width: 3,
+  max_depth: 5,
+  max_nodes: 500
+};
 
 export const CONFIG = {
   MAX_CYCLES: 10,
@@ -114,9 +121,12 @@ export async function plannerStep(bb, skills) {
   const state = bb.getControlState();
   const goal = bb.getZoneData("goal");
 
+  applyStrategy(bb);
+
   const plans = createPlan(goal, { steps: 0 }, skills, {
-    maxDepth: CONFIG.MAX_STEPS,
-    maxCost: CONFIG.ACCEPT_SCORE
+    maxDepth: globalConfig.max_depth,
+    maxCost: CONFIG.ACCEPT_SCORE,
+    maxNodes: globalConfig.max_nodes
   });
 
   bb.write("plan", plans, "planner");
@@ -135,11 +145,33 @@ export async function executorStep(bb, selectedSkill) {
     const result = await executeSkill(compiledSkill, input);
 
     bb.write("execution", { result }, "executor");
+
+    const world = bb.getZoneData("world") || {};
+    Object.assign(world, { lastResult: result, timestamp: Date.now(), lastAction: compiledSkill.capability });
+    bb.write("world", world, "executor");
+
+    const belief = bb.getZoneData("belief") || {};
+    if (result?.error) {
+      belief.lastFailure = result.error;
+      belief.failureCount = (belief.failureCount || 0) + 1;
+    } else {
+      belief.lastSuccess = result;
+      belief.successCount = (belief.successCount || 0) + 1;
+    }
+    belief.lastUpdate = Date.now();
+    bb.write("belief", belief, "executor");
+
     bb.setStatus(Status.CRITIC);
 
     return result;
   } catch (err) {
     bb.write("execution", { error: err.message }, "executor");
+
+    const belief = bb.getZoneData("belief") || {};
+    belief.lastFailure = err.message;
+    belief.lastUpdate = Date.now();
+    bb.write("belief", belief, "executor");
+
     bb.setStatus(Status.PLANNING, "execution_failed");
 
     return { error: err.message };
@@ -171,6 +203,7 @@ function shouldMutateTargeted(skill) {
 export async function learningStep(bb, selectedSkill) {
   const execution = bb.getZoneData("execution");
   const result = bb.getZoneData("result");
+  const history = bb.getZoneData("history") || [];
 
   if (!execution?.result || !selectedSkill) return;
 
@@ -184,6 +217,7 @@ export async function learningStep(bb, selectedSkill) {
       selectedSkill.success_count = (selectedSkill.success_count || 0) + 1;
     } else {
       selectedSkill.score = Math.max(0, (selectedSkill.score || 0) - 0.05);
+      selectedSkill.failure_count = (selectedSkill.failure_count || 0) + 1;
     }
 
     if (shouldMutateTargeted(selectedSkill)) {
@@ -201,13 +235,58 @@ export async function learningStep(bb, selectedSkill) {
       }
     }
   }
+
+  if (history.length > 10) {
+    const recentHistory = history.slice(-10);
+    const failureCount = recentHistory.filter(h => h.success === false).length;
+    const baselineScore = 0.5;
+    
+    if (failureCount > 5) {
+      const skills = bb.getZoneData("skills") || [];
+      for (const skill of skills) {
+        if (skill.usage_count > 5 && skill.score < baselineScore) {
+          const mutated = mutateSkill(skill);
+          
+          if (validateDSL(mutated)) {
+            const score = await testSkill(mutated);
+            
+            if (score > baselineScore + 0.05) {
+              const newVersion = createVersion(skill);
+              Object.assign(newVersion, mutated);
+              newVersion.parent_id = skill.id;
+              
+              const updatedSkills = skills.map(s => 
+                s.id === skill.id ? newVersion : s
+              );
+              bb.write("skills", updatedSkills, "learning");
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 function validateDSL(skill) {
   if (!skill.logic || !Array.isArray(skill.logic)) return false;
-  for (const step of skill.logic) {
+  
+  const logicLength = skill.logic.length;
+  
+  for (let i = 0; i < logicLength; i++) {
+    const step = skill.logic[i];
     if (!step.op || typeof step.op !== "string") return false;
+    
+    if (step.op === "if") {
+      if (step.true_jump !== undefined && step.true_jump >= logicLength) return false;
+      if (step.false_jump !== undefined && step.false_jump >= logicLength) return false;
+    }
+    
+    if (step.op === "jump") {
+      if (step.to !== undefined && step.to >= logicLength) return false;
+    }
   }
+  
   return true;
 }
 
@@ -382,45 +461,156 @@ export async function runAgent(input, skills = []) {
   bb.write("goal", input.goal || input, "agent");
   bb.write("context", input.context || {}, "agent");
   bb.write("skills", skills, "agent");
+  bb.write("world", {}, "agent");
+  bb.write("belief", {}, "agent");
+  bb.write("history", [], "agent");
 
-  for (let step = 0; step < CONFIG.MAX_CYCLES; step++) {
-    const control = bb.getControlState();
-    
-    if (control.iteration >= CONFIG.MAX_CYCLES) {
-      bb.setStatus(Status.ERROR, "max_cycle_reached");
-      break;
-    }
+  try {
+    for (let step = 0; step < CONFIG.MAX_CYCLES; step++) {
+      const control = bb.getControlState();
+      
+      if (control.iteration >= CONFIG.MAX_CYCLES) {
+        bb.setStatus(Status.ERROR, "max_cycle_reached");
+        break;
+      }
 
-    await goalManager(bb);
+      await goalManager(bb);
 
-    const status = bb.getStatus();
-    
-    if (status === Status.PLANNING) {
-      await plannerStep(bb, skills);
-    }
+      const status = bb.getStatus();
+      
+      if (status === Status.PLANNING) {
+        await plannerStep(bb, skills);
+      }
 
-    if (status === Status.EXECUTING) {
+      if (status === Status.EXECUTING) {
+        const currentSkills = bb.getZoneData("skills");
+        const selected = await selectBestSkill(currentSkills, input.goal);
+        await executorStep(bb, selected);
+      }
+
+      if (status === Status.CRITIC) {
+        const execution = bb.getZoneData("execution");
+        await criticStep(bb, execution?.result);
+      }
+
       const currentSkills = bb.getZoneData("skills");
       const selected = await selectBestSkill(currentSkills, input.goal);
-      await executorStep(bb, selected);
+      await learningStep(bb, selected);
+
+      if (bb.getStatus() === Status.DONE) break;
+
+      control.iteration++;
+      bb.updateControlState(0);
     }
-
-    if (status === Status.CRITIC) {
-      const execution = bb.getZoneData("execution");
-      await criticStep(bb, execution?.result);
-    }
-
-    const currentSkills = bb.getZoneData("skills");
-    const selected = await selectBestSkill(currentSkills, input.goal);
-    await learningStep(bb, selected);
-
-    if (bb.getStatus() === Status.DONE) break;
-
-    control.iteration++;
-    bb.updateControlState(0);
+  } catch (err) {
+    console.error("[AGENT ERROR]", err.message);
+    bb.setStatus(Status.ERROR, err.message);
+    return { error: err.message };
   }
 
   return bb.getZoneData("result");
+}
+
+function computeCuriosity(bb) {
+  const history = bb.getZoneData("history") || [];
+  const lastGoals = history.slice(-5);
+  if (lastGoals.length === 0) return 1.5;
+  
+  const recentSimilarity = lastGoals.reduce((sum, g1, i) => {
+    if (i === 0) return 0;
+    const g0 = lastGoals[i - 1];
+    const similarity = stringSimilarity(g0.goal || "", g1.goal || "");
+    return sum + (1 - similarity);
+  }, 0);
+  
+  return Math.max(0, 2 - recentSimilarity);
+}
+
+function stringSimilarity(a, b) {
+  if (!a || !b) return 0;
+  const aWords = a.toLowerCase().split(/\s+/);
+  const bWords = b.toLowerCase().split(/\s+/);
+  const intersection = aWords.filter(w => bWords.includes(w));
+  return intersection.length / Math.max(aWords.length, bWords.length);
+}
+
+function generateGoal(bb) {
+  const goals = [
+    { goal: "add numbers", relevance: 0.8, novelty: 0.6, cost: 0.3 },
+    { goal: "multiply values", relevance: 0.8, novelty: 0.5, cost: 0.3 },
+    { goal: "calculate sum", relevance: 0.7, novelty: 0.7, cost: 0.3 },
+    { goal: "fetch data", relevance: 0.6, novelty: 0.8, cost: 0.4 },
+    { goal: "list items", relevance: 0.7, novelty: 0.6, cost: 0.3 }
+  ];
+  return goals[Math.floor(Math.random() * goals.length)];
+}
+
+function addGoals(bb, newGoals) {
+  const currentGoals = bb.getZoneData("goals") || [];
+  bb.write("goals", [...currentGoals, ...newGoals], "curiosity");
+}
+
+function selectNextGoal(bb) {
+  const goals = bb.getZoneData("goals");
+  if (!goals || goals.length === 0) return null;
+  return goals[0];
+}
+
+function updateWorld(bb, result) {
+  const world = bb.getZoneData("world") || {};
+  Object.assign(world, { lastResult: result, timestamp: Date.now() });
+  bb.write("world", world, "autonomy");
+}
+
+function updateBelief(bb, result) {
+  const belief = bb.getZoneData("belief") || {};
+  if (result?.error) {
+    belief.lastFailure = result.error;
+  } else {
+    belief.lastSuccess = result;
+  }
+  belief.lastUpdate = Date.now();
+  bb.write("belief", belief, "autonomy");
+}
+
+export async function autonomousLoop(bb) {
+  while (true) {
+    const curiosity = computeCuriosity(bb);
+    
+    if (curiosity > 2) {
+      const newGoals = generateGoal(bb);
+      if (newGoals) {
+        addGoals(bb, [newGoals]);
+      }
+    }
+
+    const goal = selectNextGoal(bb);
+    if (!goal) {
+      await new Promise(r => setTimeout(r, 1000));
+      continue;
+    }
+
+    bb.write("goal", goal, "autonomy");
+    bb.setStatus(Status.PLANNING);
+
+    await runAgent({ goal: goal.goal }, bb.getZoneData("skills") || []);
+
+    if (bb.getStatus() === Status.DONE) {
+      const execution = bb.getZoneData("execution");
+      if (execution?.result) {
+        updateWorld(bb, execution.result);
+        updateBelief(bb, execution.result);
+      }
+    }
+
+    const goals = bb.getZoneData("goals") || [];
+    if (goals.length > 0 && goals[0].goal === goal.goal) {
+      goals.shift();
+      bb.write("goals", goals, "autonomy");
+    }
+
+    await new Promise(r => setTimeout(r, 5000));
+  }
 }
 
 async function goalManager(bb) {
@@ -428,6 +618,29 @@ async function goalManager(bb) {
   if (!goal) {
     bb.setStatus(Status.ERROR, "no_goal");
   }
+}
+
+const metaReasoning = new MetaReasoningLayer();
+
+function applyStrategy(bb) {
+  const stats = {
+    history: bb.getZoneData("history") || [],
+    autonomy: { budget: bb.getZoneData("goals") ? {} : null }
+  };
+  
+  const result = metaReasoning.analyzeAndImprove(stats);
+  
+  if (result?.config) {
+    globalConfig.beam_width = result.config.beam_width || globalConfig.beam_width;
+    globalConfig.max_depth = result.config.max_depth || globalConfig.max_depth;
+    globalConfig.max_nodes = result.config.max_nodes || globalConfig.max_nodes;
+  }
+  
+  return result;
+}
+
+function getGlobalConfig() {
+  return { ...globalConfig };
 }
 
 export async function runAgent(input) {
