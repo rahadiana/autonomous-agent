@@ -3,6 +3,29 @@ import fetch from "node-fetch";
 const RATE_LIMIT_MS = 200;
 let lastCall = 0;
 
+const httpCache = new Map();
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+function getCacheKey(tool, args) {
+  return `${tool}:${JSON.stringify(args)}`;
+}
+
+function getCached(key) {
+  const entry = httpCache.get(key);
+  if (!entry) return null;
+  
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    httpCache.delete(key);
+    return null;
+  }
+  
+  return entry.data;
+}
+
+function setCache(key, data) {
+  httpCache.set(key, { data, timestamp: Date.now() });
+}
+
 async function rateLimit() {
   const now = Date.now();
   const elapsed = now - lastCall;
@@ -22,20 +45,31 @@ export const ALLOWED_TOOLS = [
 
 export const mcp = {
   async "http.get"(args) {
+    const cacheKey = getCacheKey("http.get", args);
+    const cached = getCached(cacheKey);
+    if (cached) return cached;
+    
     await rateLimit();
     
     const res = await fetch(args.url, {
       timeout: 5000
     });
 
-    return {
+    const result = {
       status: res.status,
       statusText: res.statusText,
       body: await res.text()
     };
+    
+    setCache(cacheKey, result);
+    return result;
   },
 
   async "http.post"(args) {
+    const cacheKey = getCacheKey("http.post", args);
+    const cached = getCached(cacheKey);
+    if (cached) return cached;
+    
     await rateLimit();
     
     const res = await fetch(args.url, {
@@ -48,11 +82,14 @@ export const mcp = {
       timeout: 5000
     });
 
-    return {
+    const result = {
       status: res.status,
       statusText: res.statusText,
       body: await res.text()
     };
+    
+    setCache(cacheKey, result);
+    return result;
   },
 
   "json.parse"(args) {
