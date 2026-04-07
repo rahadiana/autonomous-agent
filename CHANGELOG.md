@@ -2,7 +2,7 @@
 
 ## Test Results - 2026-04-07
 
-All **226 tests passed** (duration: ~1755ms)
+All **226 tests passed** (duration: ~2010ms)
 
 ---
 
@@ -66,7 +66,7 @@ All **226 tests passed** (duration: ~1755ms)
 
 ---
 
-### 5. executor.test.js (20 tests)
+### 5. executor.test.js (54 tests)
 
 | Test | Input | Output | Status |
 |------|-------|--------|--------|
@@ -88,12 +88,17 @@ All **226 tests passed** (duration: ~1755ms)
 | runSkill executes mcp_call to json.parse | {op:"mcp_call",tool:"json.parse",args:{text:'{"key":"value"}'}} | {key:"value"} | PASS |
 | runSkill rejects disallowed tool | tool: "fs.readFile" | Error: Tool not allowed | PASS |
 | runSkill resolves memory reference in mcp_call args | jsonText in memory | parsed correctly | PASS |
+| runSkill resolves nested memory reference in mcp_call args | nested memory path | parsed correctly | PASS |
 | runSkill executes if branching - true branch | condition: true | result="yes" | PASS |
 | runSkill executes if branching - false branch | condition: false | result="no" | PASS |
+| runSkill uses memory value in condition | memory.value | evaluated | PASS |
+| runSkill handles nested path in set | nested path | set correctly | PASS |
+| runSkill throws on unknown operation | unknown op | Error | PASS |
+| runDSL is alias for runSkill | skill + input | same output | PASS |
 
 ---
 
-### 6. executorDSL.test.js (34 tests)
+### 6. executorDSL.test.js (30 tests)
 
 | Test | Input | Output | Status |
 |------|-------|--------|--------|
@@ -101,7 +106,7 @@ All **226 tests passed** (duration: ~1755ms)
 | for loop processes each item | [1,2,3] with set result | result = [1,2,3] | PASS |
 | for loop tracks index | [a,b,c] with index variable | index: 0,1,2 | PASS |
 | for_range loops from start to end | start: 0, end: 5 | 5 iterations | PASS |
-| for_range supports custom step | start: 0, end: 10, step: 2 | 0,2,4,6,8 | PASS |
+| for_range supports custom step size | start: 0, end: 10, step: 2 | 0,2,4,6,8 | PASS |
 | while loop executes until condition fails | counter < 3 | 3 iterations | PASS |
 | switch matches correct case | value: "b", cases: {a,b,c} | "b" matched | PASS |
 | switch falls through to default | value: "x", cases: {a,b} | default executed | PASS |
@@ -111,26 +116,26 @@ All **226 tests passed** (duration: ~1755ms)
 | comparison operator eq returns true | {comparison: {left: 1, op: "eq", right: 1}} | true | PASS |
 | comparison operator lt returns true | {comparison: {left: 1, op: "lt", right: 2}} | true | PASS |
 | comparison operator gt returns true | {comparison: {left: 2, op: "gt", right: 1}} | true | PASS |
-| comparison operator in works | {comparison: {left: "a", op: "in", right: ["a","b"]}} | true | PASS |
+| comparison operator in works with arrays | {comparison: {left: "a", op: "in", right: ["a","b"]}} | true | PASS |
 | comparison operator typeof works | {comparison: {left: "str", op: "typeof", right: "string"}} | true | PASS |
 | nested if-else works | condition1: true, condition2: false | true branch | PASS |
-| nested if-else with else | condition1: false, condition2: false | else branch | PASS |
+| nested if-else with else branch | condition1: false, condition2: false | else branch | PASS |
 | for loop with object values | {a:1, b:2} | [1,2] | PASS |
-| while loop with counter | counter < 3, counter++ | 3 iterations | PASS |
+| while loop with counter and condition | counter < 3, counter++ | 3 iterations | PASS |
 | map with string concatenation | [a,b] + suffix | [as, bs] | PASS |
 | filter with string type check | [1,"a",2] typeof string | ["a"] | PASS |
 | reduce with string concatenation | ["a","b","c"], initial: "" | "abc" | PASS |
 | complex pipeline: filter then map | [1,2,3,4] filter >2 map *2 | [6,8] | PASS |
-| comparison operator neq | {left: 1, op: "neq", right: 2} | true | PASS |
-| comparison operator lte | {left: 1, op: "lte", right: 1} | true | PASS |
-| comparison operator gte | {left: 1, op: "gte", right: 1} | true | PASS |
-| for loop prevents infinite iteration | 10000+ items | stopped at max | PASS |
-| while loop prevents infinite iteration | infinite condition | stopped at max | PASS |
-| switch with no matching case | value: "x", cases: {a,b} | no action | PASS |
+| comparison operator neq returns true | {left: 1, op: "neq", right: 2} | true | PASS |
+| comparison operator lte returns true for equal values | {left: 1, op: "lte", right: 1} | true | PASS |
+| comparison operator gte returns true for equal values | {left: 1, op: "gte", right: 1} | true | PASS |
+| for loop prevents infinite iteration with MAX_LOOP | 10000+ items | stopped at max | PASS |
+| while loop prevents infinite iteration with MAX_LOOP | infinite condition | stopped at max | PASS |
+| switch with no matching case and no default | value: "x", cases: {a,b} | no action | PASS |
 
 ---
 
-### 7. executorDSLAdvanced.test.js (8 tests)
+### 7. executorDSLAdvanced.test.js (4 tests)
 
 | Test | Input | Output | Status |
 |------|-------|--------|--------|
@@ -158,11 +163,11 @@ All **226 tests passed** (duration: ~1755ms)
 | Test | Input | Output | Status |
 |------|-------|--------|--------|
 | ALLOWED_TOOLS contains expected tools | - | ["http.get","http.post","json.parse","json.stringify"] | PASS |
-| isToolAllowed returns true for allowed | "json.parse" | true | PASS |
-| isToolAllowed returns false for disallowed | "eval" | false | PASS |
+| isToolAllowed returns true for allowed tools | "json.parse" | true | PASS |
+| isToolAllowed returns false for disallowed tools | "eval" | false | PASS |
 | json.parse tool parses valid JSON | {text: '{"key":"value"}'} | {key: "value"} | PASS |
 | json.parse tool returns error for invalid JSON | {text: 'invalid'} | {error: true} | PASS |
-| json.stringify tool converts object | {obj: {a: 1}} | '{"a":1}' | PASS |
+| json.stringify tool converts object to string | {obj: {a: 1}} | '{"a":1}' | PASS |
 | callTool throws for disallowed tool | "eval", {} | Error | PASS |
 | callTool throws for non-existent tool | "nonexistent", {} | Error | PASS |
 | callTool works for allowed tool | "json.parse", {text:'{}'} | {} | PASS |
@@ -173,15 +178,15 @@ All **226 tests passed** (duration: ~1755ms)
 
 | Test | Input | Output | Status |
 |------|-------|--------|--------|
-| mutateSkill returns clone | {logic:[{op:"add"}]} | new object, not same | PASS |
+| mutateSkill returns clone with same structure | {logic:[{op:"add"}]} | new object, not same | PASS |
 | mutateSkill can change add to subtract | {op: "add"} | {op: "subtract"} | PASS |
-| mutateSkill handles empty logic | {logic: []} | [] | PASS |
-| mutateSkill handles string logic | "code string" | "code string" | PASS |
+| mutateSkill handles empty logic array | {logic: []} | [] | PASS |
+| mutateSkill handles string logic (passthrough) | "code string" | "code string" | PASS |
 | mutateSkill does not mutate original | original skill | unchanged | PASS |
 
 ---
 
-### 11. planner.test.js (15 tests)
+### 11. planner.test.js (16 tests)
 
 | Test | Input | Output | Status |
 |------|-------|--------|--------|
@@ -233,7 +238,7 @@ All **226 tests passed** (duration: ~1755ms)
 | Reasoner reflect on successful execution | result: "success" | improvements | PASS |
 | Reasoner reflect on failed execution | result: "error" | fixes suggested | PASS |
 | Reasoner reflect considers execution time | execution time | time considered | PASS |
-| Reasoner selectBest chooses highest | scores: [0.5, 0.8, 0.3] | 0.8 selected | PASS |
+| Reasoner selectBest chooses highest score | scores: [0.5, 0.8, 0.3] | 0.8 selected | PASS |
 | Reasoner selectBest handles empty array | [] | null | PASS |
 | createCritic returns review and suggest functions | - | functions | PASS |
 | createCritic review works | plan | review | PASS |
@@ -258,17 +263,17 @@ All **226 tests passed** (duration: ~1755ms)
 | Test | Input | Output | Status |
 |------|-------|--------|--------|
 | SkillSearch indexSkill adds skill to index | skill object | indexed | PASS |
-| SkillSearch searchByText finds relevant | "add numbers" | matching skills | PASS |
+| SkillSearch searchByText finds relevant skills | "add numbers" | matching skills | PASS |
 | SkillSearch searchByText respects topK | topK: 2 | 2 results | PASS |
 | SkillSearch searchByText respects threshold | threshold: 0.5 | filtered | PASS |
-| SkillSearch searchByCapability filters | "math" | filtered results | PASS |
-| SkillSearch findSimilar returns similar | skill | similar skills | PASS |
-| SkillSearch getSkill returns by id | id | skill object | PASS |
-| SkillSearch hasSkill returns boolean | id | true/false | PASS |
-| SkillSearch removeSkill deletes | id | removed | PASS |
-| SkillSearch count returns total | - | count number | PASS |
-| SkillSearch clear removes all | - | empty index | PASS |
-| SkillSearch listAll returns all | - | all skills | PASS |
+| SkillSearch searchByCapability filters by capability | "math" | filtered results | PASS |
+| SkillSearch findSimilar returns similar skills | skill | similar skills | PASS |
+| SkillSearch getSkill returns skill by id | id | skill object | PASS |
+| SkillSearch hasSkill returns correct boolean | id | true/false | PASS |
+| SkillSearch removeSkill removes from index | id | removed | PASS |
+| SkillSearch count returns total indexed skills | - | count number | PASS |
+| SkillSearch clear removes all skills | - | empty index | PASS |
+| SkillSearch listAll returns all skills | - | all skills | PASS |
 | SkillSearch with no matches returns empty array | no match query | [] | PASS |
 | SkillSearch handles duplicate id updates | duplicate id | updated | PASS |
 
@@ -279,11 +284,11 @@ All **226 tests passed** (duration: ~1755ms)
 | Test | Input | Output | Status |
 |------|-------|--------|--------|
 | handleRequest throws when no skill found | capability: "test" | Error | PASS |
-| handleRequest executes skill | capability: "math.add", input: {a:1,b:2} | {result: 3} | PASS |
-| handleRequest updates usage_count | skill usage | usage_count +1 | PASS |
-| handleRequest updates failure_count | validation failure | failure_count +1 | PASS |
-| handleRequest updates last_used_at | execution | timestamp updated | PASS |
-| handleRequest selects via bandit | multiple skills | highest bandit score | PASS |
+| handleRequest executes skill and returns result | capability: "math.add", input: {a:1,b:2} | {result: 3} | PASS |
+| handleRequest updates usage_count after execution | skill usage | usage_count +1 | PASS |
+| handleRequest updates failure_count on validation failure | validation failure | failure_count +1 | PASS |
+| handleRequest updates last_used_at timestamp | execution | timestamp updated | PASS |
+| handleRequest selects via bandit when multiple skills exist | multiple skills | highest bandit score | PASS |
 | handleRequest score updates with reinforcement formula | successRate: 0.8 | newScore calculated | PASS |
 
 ---
@@ -292,10 +297,10 @@ All **226 tests passed** (duration: ~1755ms)
 
 | Test | Input | Output | Status |
 |------|-------|--------|--------|
-| buildTestCases returns at least empty | schema: {} | has empty test | PASS |
-| buildTestCases generates number cases | type: "number" | number tests | PASS |
-| buildTestCases generates string cases | type: "string" | string tests | PASS |
-| buildTestCases generates boolean cases | type: "boolean" | boolean tests | PASS |
+| buildTestCases returns at least empty input test | schema: {} | has empty test | PASS |
+| buildTestCases generates number test cases | type: "number" | number tests | PASS |
+| buildTestCases generates string test cases | type: "string" | string tests | PASS |
+| buildTestCases generates boolean test cases | type: "boolean" | boolean tests | PASS |
 | buildEdgeCases includes null and undefined | type: "string" | has null test | PASS |
 | buildEdgeCases includes empty array and string | type: "array" | has [] test | PASS |
 | buildRandomFuzz generates specified count | count: 5 | 5 tests | PASS |
@@ -328,7 +333,7 @@ All **226 tests passed** (duration: ~1755ms)
 | ToolRegistry register throws on missing name/handler | missing fields | Error | PASS |
 | ToolRegistry getByCapability returns tools | "math" | tools array | PASS |
 | ToolRegistry unregister removes tool | "test" | removed | PASS |
-| ToolRegistry listByTag filters | "json" | filtered | PASS |
+| ToolRegistry listByTag filters correctly | "json" | filtered | PASS |
 | ToolRegistry search finds by name/description/capability | "parse" | matching | PASS |
 | ToolRegistry clear removes all | - | empty | PASS |
 
@@ -348,7 +353,7 @@ All **226 tests passed** (duration: ~1755ms)
 
 ---
 
-### 21. vectorStore.test.js (13 tests)
+### 21. vectorStore.test.js (17 tests)
 
 | Test | Input | Output | Status |
 |------|-------|--------|--------|
@@ -361,11 +366,11 @@ All **226 tests passed** (duration: ~1755ms)
 | cosineSimilarity returns -1 for opposite vectors | [1,0], [-1,0] | -1 | PASS |
 | cosineSimilarity returns 0 for different length vectors | different lengths | 0 | PASS |
 | VectorStore add and get | add(id, vec, data), get(id) | retrieved data | PASS |
-| VectorStore search returns top K | search(query, k:3) | 3 results | PASS |
+| VectorStore search returns top K results | search(query, k:3) | 3 results | PASS |
 | VectorStore search respects threshold | threshold: 0.5 | filtered | PASS |
 | VectorStore remove deletes entry | id | removed | PASS |
 | VectorStore size returns correct count | - | count | PASS |
-| VectorStore clear removes all | - | empty | PASS |
+| VectorStore clear removes all entries | - | empty | PASS |
 | VectorStore throws on dimension mismatch | wrong dim | Error | PASS |
 | createSkillEmbedding generates embedding from skill | skill object | embedding | PASS |
 | createSkillEmbedding same skill produces same embedding | same skill | same embedding | PASS |
@@ -401,6 +406,9 @@ All **226 tests passed** (duration: ~1755ms)
 12. **Schema validation** - Input/output schema enforcement
 13. **Type checking** - Numeric operations type validation
 14. **Filter condition validation** - Boolean condition enforcement
+15. **Bandit score normalization** - Normalized score before bandit calculation
+16. **Score capping** - Min/max score clamped to [0, 1]
+17. **Decay threshold** - Skip skills with score < 0.1 during decay
 
 ---
 
@@ -411,6 +419,6 @@ All **226 tests passed** (duration: ~1755ms)
 | Total Tests | 226 |
 | Passed | 226 |
 | Failed | 0 |
-| Duration | ~1755ms |
+| Duration | ~2010ms |
 
 **All tests passed!** ✅

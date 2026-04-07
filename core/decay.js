@@ -6,6 +6,7 @@ export async function applyDecay() {
 
   for (const s of skills) {
     if (!s.last_used_at) continue;
+    if (s.score < 0.1) continue;
 
     const days =
       (now - new Date(s.last_used_at)) / (1000 * 60 * 60 * 24);
@@ -13,7 +14,7 @@ export async function applyDecay() {
     const decay = Math.exp(-0.05 * days);
 
     await s.update({
-      score: s.score * decay
+      score: Math.max(0, s.score * decay)
     });
   }
 }

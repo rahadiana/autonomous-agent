@@ -38,13 +38,25 @@ export function banditScore(skill, total) {
 }
 
 export function selectSkill(skills) {
-  const total = skills.reduce((a, b) => a + b.usage_count, 0);
+  if (!skills || skills.length === 0) return null;
+  if (skills.length === 1) return skills[0];
+
+  const maxScore = Math.max(...skills.map(s => s.score || 0));
+  const minScore = Math.min(...skills.map(s => s.score || 0));
+  const range = maxScore - minScore || 1;
+
+  const normalizedSkills = skills.map(s => ({
+    ...s,
+    normalizedScore: range > 0 ? (s.score - minScore) / range : 0.5
+  }));
+
+  const total = normalizedSkills.reduce((a, b) => a + b.normalizedScore, 0);
 
   let best = null;
   let bestScore = -Infinity;
 
-  for (const s of skills) {
-    const score = banditScore(s, total);
+  for (const s of normalizedSkills) {
+    const score = banditScore({ ...s, score: s.normalizedScore }, total);
 
     if (score > bestScore) {
       bestScore = score;

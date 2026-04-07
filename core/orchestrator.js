@@ -501,10 +501,10 @@ async function updateSkillStats(skill, valid) {
   skill.last_used_at = Date.now();
   
   if (valid) {
-    skill.score = Math.min(1, (skill.score || 0) + 0.1);
+    skill.score = Math.min(1, Math.max(0, (skill.score || 0) + 0.1));
     skill.success_count = (skill.success_count || 0) + 1;
   } else {
-    skill.score = Math.max(0, (skill.score || 0) - 0.05);
+    skill.score = Math.max(0, Math.min(1, (skill.score || 0) - 0.05));
   }
 }
 
