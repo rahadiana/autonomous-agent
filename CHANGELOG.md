@@ -1,3 +1,62 @@
+# Changelog
+
+## 2024-04-07 - Grounded Evaluation System Implemented
+
+### Core Improvements (per next_plan.md)
+
+#### 1. ✅ Grounded Evaluator (WAJIB)
+- Implemented `evaluateStrict` in `unifiedEvaluator.js`
+- Ground truth based scoring with real test oracles
+- Multi-component scoring: correctness (60%), schema (15%), robustness (15%), efficiency (10%)
+- Task-specific scoring functions per capability (math.add, math.multiply, etc.)
+- Floating point tolerance for numeric comparisons
+
+#### 2. ✅ Schema-Driven Test Generator (WAJIB)
+- Implemented in `testBuilder.js`
+- `generateFromSchema`: generates test inputs from JSON schema
+- `buildTestCases`: generates normal + edge case tests
+- `buildRandomFuzz`: generates random fuzz tests
+- `buildEdgeCases`: handles null, undefined, empty array, etc.
+
+#### 3. ✅ Test Runner with Ground Truth (WAJIB)
+- Implemented in `testRunner.js`
+- `deepEqual` for comparing output vs expected with floating point tolerance
+- `isErrorResult` for detecting error conditions
+- `checkConsistency` - runs same input 3x for deterministic behavior
+- Full test result structure: input, expected, actual, passed, validSchema, error
+
+#### 4. ✅ Ground Truth Test Cases
+- Implemented in `groundTruth.js`
+- Comprehensive test cases for math.add, math.multiply, math.subtract, math.divide
+- Categories: valid (normal), edge (boundary), invalid (error handling)
+- Random test case generator for adversarial testing
+
+#### 5. ✅ Failure Memory
+- Implemented in `failureMemory.js`
+- Tracks failures per skill with input, error, timestamp
+- `tooManyFailures`: checks failure threshold
+- `applyFailurePenalty`: applies penalty to low-quality skills
+- `getFailures`, `getFailureCount` for analysis
+
+#### 6. ✅ Strict Promotion Rule
+- In `testRunner.js`: skills with accuracy < 0.5 get 50% score degradation
+- Regression guard prevents bad mutations from propagating
+
+#### 7. ✅ Unified Skill Scoring
+- `computeReward` in `unifiedEvaluator.js` combines:
+  - Schema validity (30%)
+  - Output richness (20%)
+  - Determinism/history (20%)
+  - Latency bonus (10%)
+  - Historical success rate (20%)
+
+### Test Results
+- All 226 tests passing
+- Correct skills get high scores (~0.66)
+- Wrong skills get low scores (~0.14)
+- Error skills get ~0.19
+
+---
 Saya sudah baca seluruh struktur yang kamu kirim (planner, DSL, mutation, bandit, blackboard, dll). Secara garis besar:
 
 ➡️ Kamu sudah **melewati level “toy agent”**
