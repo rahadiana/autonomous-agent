@@ -4,202 +4,7 @@
 
 ---
 
-## 1. Fix #1 - Executor with Trace/Validation (core/executor.js)
-
-### Input:
-```javascript
-step = { op: "add", a: "$input.a", b: "$input.b", to: "result" }
-ctx = { input: { a: 2, b: 3 }, memory: {}, output: {} }
-```
-
-### Output:
-```javascript
-{
-  result: 5,
-  trace: {
-    step: { op: "add", a: "$input.a", b: "$input.b", to: "result" },
-    before: {},
-    after: { result: 5 },
-    status: "ok"
-  }
-}
-```
-
-### Test: executeStepWithTrace
-```javascript
-// Input
-const skill = { logic: [{ op: "add", a: "$input.a", b: "$input.b", to: "result" }] };
-const input = { a: 5, b: 3 };
-
-// Output
-{ result: 8, _meta: { stepsExecuted: 1 } }
-```
-
----
-
-## 2. Fix #2 - Inline Validation (core/executor.js)
-
-### Input:
-```javascript
-skill = {
-  output_schema: { required: ["result"], properties: { result: "number" } },
-  logic: [{ op: "set", path: "result", value: 5 }]
-}
-input = {}
-```
-
-### Output:
-```javascript
-{ result: 5, valid: true }
-```
-
-### Test: runDSLWithValidation
-```javascript
-// Input
-const skill = {
-  output_schema: { properties: { value: "number" } },
-  logic: [{ op: "set", path: "value", value: 42 }]
-};
-
-// Output (success)
-{ value: 42 }
-
-// Output (schema mismatch - throws error)
-Error: Output schema invalid: Field value expected number, got string
-```
-
----
-
-## 3. Fix #3 - Deterministic Scoring (core/executor.js)
-
-### Input:
-```javascript
-skill = { logic: [{ op: "add", a: 1, b: 1, to: "result" }] }
-input = {}
-```
-
-### Output:
-```javascript
-{ deterministic: true }
-// Same input produces same output on multiple runs
-```
-
-### Test: checkDeterminism
-```javascript
-// Input
-const skill = { logic: [{ op: "set", path: "x", value: 10 }] };
-const input = {};
-
-// Run twice
-const r1 = await runDSL(skill, input);
-const r2 = await runDSL(skill, input);
-
-// Output
-{ deterministic: true }  // r1 === r2
-```
-
----
-
-## 4. Fix #4 - Capability Enforcement (core/planner.js)
-
-### Input:
-```javascript
-plan = { bestPath: [{ capability: "math.add" }, { capability: "math.multiply" }] }
-registry = new Set(["math.add", "math.subtract"])
-```
-
-### Output:
-```javascript
-{ valid: false, errors: ["Unknown capability: math.multiply"] }
-```
-
-### Test: validatePlan
-```javascript
-// Input
-const plan = { bestPath: [{ capability: "math.add" }] };
-const registry = new Set(["math.add", "math.subtract"]);
-
-// Output (valid)
-{ valid: true, errors: [] }
-
-// Output (invalid capability)
-{ valid: false, errors: ["Unknown capability: api.http_get"] }
-```
-
----
-
-## 5. Fix #5 - Blackboard Versioning (core/blackboard.js)
-
-### Input:
-```javascript
-blackboard.write("goal", { task: "test" }, "planner");
-blackboard.write("goal", { task: "test2" }, "planner");
-```
-
-### Output:
-```javascript
-{ version: 2, data: { task: "test2" }, history: [ /* 2 entries */ ] }
-```
-
-### Test: Blackboard versioning
-```javascript
-// Input
-const bb = new Blackboard();
-await bb.write("goal", { task: "test1" }, "planner");
-await bb.write("goal", { task: "test2" }, "planner");
-
-// Output
-{
-  zone: "goal",
-  version: 2,
-  action: "write",
-  oldData: { task: "test1" },
-  newData: { task: "test2" }
-}
-```
-
----
-
-## 6. Fix #6 - Mutation with Test Gate (core/mutation.js)
-
-### Input:
-```javascript
-parentSkill = { score: 0.7, usage_count: 10, mutation_count: 1 }
-mutatedScore = 0.8
-```
-
-### Output:
-```javascript
-{ accept: true, reason: "improvement_accepted", details: { improvement: 0.1 } }
-```
-
-### Test: acceptMutation
-```javascript
-// Input
-const oldScore = 0.7;
-const newScore = 0.85;
-
-// Output (improvement above threshold)
-{ accept: true, reason: "improvement_accepted", details: { improvement: 0.15 } }
-
-// Input
-const oldScore = 0.7;
-const newScore = 0.72;
-
-// Output (improvement below threshold)
-{ accept: false, reason: "improvement_below_threshold", details: { improvement: 0.02 } }
-
-// Input
-const oldScore = 0.7;
-const newScore = 0.6;
-
-// Output (regression)
-{ accept: false, reason: "regression_detected", details: { oldScore: 0.7, newScore: 0.6, improvement: -0.1 } }
-```
-
----
-
-## 7. Bandit Score (core/bandit.js)
+## 1. Bandit Strategy (core/bandit.js)
 
 ### Test: banditScore
 ```javascript
@@ -208,7 +13,7 @@ const skill = { score: 0.8, usage_count: 1 };
 const total = 10;
 
 // Output
-{ score: 0.8, explore: 0.47, total: 0.8 + 0.47 = 1.27 }
+{ score: 0.8, explore: 0.47, total: 1.27 }
 ```
 
 ### Test: selectSkill
@@ -225,7 +30,7 @@ const skills = [
 
 ---
 
-## 8. Call Skill (core/executor.js)
+## 2. Call Skill (core/executor.js)
 
 ### Test: call_skill executes nested skill
 ```javascript
@@ -261,7 +66,7 @@ const skill = {
 
 ---
 
-## 9. Executor DSL (core/executorDSL.test.js)
+## 3. Executor DSL (core/executor.js)
 
 ### Test: Basic add operation
 ```javascript
@@ -318,7 +123,7 @@ const skill = {
 
 ---
 
-## 10. Validator (core/validator.test.js)
+## 4. Validator (core/validator.js)
 
 ### Test: Schema validation
 ```javascript
@@ -344,7 +149,7 @@ const data = { name: "John", age: "30" };
 
 ---
 
-## 11. Versioning (core/versioning.test.js)
+## 5. Versioning (core/versioning.js)
 
 ### Test: createVersion
 ```javascript
@@ -362,7 +167,7 @@ const skill = { id: "skill_1", version: 1, logic: [] };
 
 ---
 
-## 12. VectorStore (core/vectorStore.test.js)
+## 6. VectorStore (core/vectorStore.js)
 
 ### Test: VectorStore add and search
 ```javascript
@@ -380,21 +185,134 @@ vs.search([1, 0, 0], 1);
 
 ---
 
+## 7. Capability Normalization (core/capabilityNormalization.js)
+
+### Test: normalizeCapability
+```javascript
+// Input
+"Jumlahkan angka"
+
+// Output
+"jumlahkan angka"
+```
+
+---
+
+## 8. Planner (core/planner.js)
+
+### Test: validatePlan
+```javascript
+// Input
+const plan = { bestPath: [{ capability: "math.add" }] };
+const registry = new Set(["math.add", "math.subtract"]);
+
+// Output (valid)
+{ valid: true, errors: [] }
+
+// Output (invalid capability)
+{ valid: false, errors: ["Unknown capability: api.http_get"] }
+```
+
+---
+
+## 9. Blackboard (core/blackboard.js)
+
+### Test: Blackboard versioning
+```javascript
+// Input
+const bb = new Blackboard();
+await bb.write("goal", { task: "test1" }, "planner");
+await bb.write("goal", { task: "test2" }, "planner");
+
+// Output
+{
+  zone: "goal",
+  version: 2,
+  action: "write",
+  oldData: { task: "test1" },
+  newData: { task: "test2" }
+}
+```
+
+---
+
+## 10. Mutation (core/mutation.js)
+
+### Test: acceptMutation
+```javascript
+// Input
+const oldScore = 0.7;
+const newScore = 0.85;
+
+// Output (improvement above threshold)
+{ accept: true, reason: "improvement_accepted", details: { improvement: 0.15 } }
+
+// Input
+const oldScore = 0.7;
+const newScore = 0.72;
+
+// Output (improvement below threshold)
+{ accept: false, reason: "improvement_below_threshold", details: { improvement: 0.02 } }
+
+// Input
+const oldScore = 0.7;
+const newScore = 0.6;
+
+// Output (regression)
+{ accept: false, reason: "regression_detected", details: { oldScore: 0.7, newScore: 0.6, improvement: -0.1 } }
+```
+
+---
+
+## 11. Failure Memory (core/failureMemory.js)
+
+### Test: logFailure
+```javascript
+// Input
+logFailure({ a: 1 }, "skill_1", "Error: invalid input");
+
+// Output (stored in memory)
+{
+  input: { a: 1 },
+  skill_id: "skill_1",
+  error: "Error: invalid input",
+  created_at: 1712486400000
+}
+```
+
+---
+
+## 12. Decay (core/decay.js)
+
+### Test: applyDecay
+```javascript
+// Input
+const skill = {
+  score: 0.8,
+  last_used_at: Date.now() - (30 * 24 * 60 * 60 * 1000)
+};
+
+// Output
+{ score: 0.64 } // 0.8 * (1 - 0.05 * 30/30)
+```
+
+---
+
 ## Summary
 
 | Fix | File | Status |
 |-----|------|--------|
-| Executor with Trace | core/executor.js | ✅ |
-| Inline Validation | core/executor.js | ✅ |
-| Deterministic Scoring | core/executor.js | ✅ |
-| Capability Enforcement | core/planner.js | ✅ |
-| Blackboard Versioning | core/blackboard.js | ✅ |
-| Mutation with Test Gate | core/mutation.js | ✅ |
 | Bandit Strategy | core/bandit.js | ✅ |
 | Call Skill | core/executor.js | ✅ |
 | Executor DSL | core/executor.js | ✅ |
 | Validator | core/validator.js | ✅ |
 | Versioning | core/versioning.js | ✅ |
 | VectorStore | core/vectorStore.js | ✅ |
+| Capability Normalization | core/capabilityNormalization.js | ✅ |
+| Planner | core/planner.js | ✅ |
+| Blackboard | core/blackboard.js | ✅ |
+| Mutation | core/mutation.js | ✅ |
+| Failure Memory | core/failureMemory.js | ✅ |
+| Decay | core/decay.js | ✅ |
 
 **Total: 226 tests PASSED**
