@@ -1,5 +1,59 @@
 # CHANGELOG
 
+## 2026-04-07 - MARKDOWN_PLAN/3-7 Implementation
+
+### DSL Executor (services/dslExecutor.js)
+- Safe instruction-based DSL execution with whitelisted operations
+- Operations: get, set, add, subtract, multiply, divide, concat, mcp_call, compare, if, jump, call_skill, map
+
+**Basic Math Input:**
+```js
+{ skill: { logic: [{ op: "get", path: "input.a", to: "a" }, { op: "get", path: "input.b", to: "b" }, { op: "add", a: "a", b: "b", to: "result" }, { op: "set", path: "result", value: "result" }] }, input: { a: 2, b: 3 } }
+```
+**Basic Math Output:**
+```js
+{ result: 5 }
+```
+
+**MCP Call Input:**
+```js
+{ skill: { logic: [{ op: "mcp_call", tool: "http.get", args: { url: "https://example.com" }, to: "res" }] }, input: {} }
+```
+**MCP Call Output:**
+```js
+{ res: { status: 200, body: "..." } }
+```
+
+**Conditional Branching Input:**
+```js
+{ skill: { logic: [{ op: "get", path: "input.x", to: "x" }, { op: "compare", a: "x", b: 10, operator: ">", to: "isGreater" }, { op: "if", condition: "isGreater", true_jump: 4, false_jump: 2 }, { op: "set", path: "result", value: "big" }, { op: "jump", to: 5 }, { op: "set", path: "result", value: "small" }] }, input: { x: 15 } }
+```
+**Conditional Branching Output:**
+```js
+{ result: "big" }
+```
+
+**Skill Composition Input:**
+```js
+{ skill: { logic: [{ op: "call_skill", skill: "math.add", input: { a: 1, b: 2 }, to: "sum" }, { op: "set", path: "result", value: "sum" }] }, input: {} }
+```
+**Skill Composition Output:**
+```js
+{ result: { result: 3 } }
+```
+
+**Array Map Input:**
+```js
+{ skill: { logic: [{ op: "map", source: "input.items", as: "item", steps: [{ op: "get", path: "item.value", to: "v" }, { op: "add", a: "v", b: 1, to: "newV" }, { op: "set", path: "output.value", value: "newV" }], to: "results" }], input: { items: [{ value: 1 }, { value: 2 }] } }
+```
+**Array Map Output:**
+```js
+{ results: [{ value: 2 }, { value: 3 }] }
+```
+**Status:** PASS (14/14 tests)
+
+---
+
 ## 2026-04-07 - MARKDOWN_PLAN/2 Implementation
 
 ### New Components Created
@@ -150,8 +204,8 @@ false
 ---
 
 ### Summary
-- Total Tests: 29
-- Passed: 29
+- Total Tests: 43
+- Passed: 43
 - Failed: 0
 
 All tests passing.
