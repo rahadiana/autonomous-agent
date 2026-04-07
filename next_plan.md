@@ -1,518 +1,399 @@
-Saya sudah baca struktur dan file yang kamu kirim. Saya tidak akan basa-basi: **arsitektur kamu sudah benar arah, tapi belum “system-grade”**. Masih banyak bagian yang kelihatan canggih di dokumen, tapi belum “nyambung secara runtime”.
+Saya sudah baca seluruh struktur + dokumen arsitektur kamu. Secara konsep: **arahnya sudah benar**, tapi implementasi kamu masih banyak celah yang bikin sistem ini **tidak akan pernah benar-benar “belajar” atau stabil**.
 
-Saya breakdown secara brutal dan actionable.
-
----
-
-# 🔴 1. MASALAH UTAMA (ROOT CAUSE)
-
-## ❌ 1. Kamu punya “arsitektur”, tapi belum punya “eksekusi yang konsisten”
-
-Semua file kamu bagus secara konsep:
-
-* multi-agent
-* planner + critic
-* blackboard
-* mutation
-* bandit
-* DSL
-
-Tapi:
-
-👉 **belum ada unified runtime contract**
-
-Contoh fatal:
-
-* planner → output JSON
-* executor → expect DSL
-* critic → expect result
-* memory → beda format lagi
-
-➡️ Ini akan bikin:
-
-* data mismatch
-* debugging susah
-* agent tidak stabil
+Saya tidak akan basa-basi. Ini breakdown kritisnya.
 
 ---
 
-## ❌ 2. Blackboard belum jadi “single source of truth”
+# 🔴 MASALAH FUNDAMENTAL (INI YANG BIKIN SISTEM GAGAL)
 
-Di dokumen kamu:
+## 1. ❌ “Learning loop” kamu belum real
 
+Kamu sudah tulis reinforcement, decay, versioning, dll — tapi itu masih **teoretis**, bukan benar-benar integrated ke runtime.
 
-
-Blackboard sudah ada, tapi:
-
-### Masalah:
-
-* tidak ada schema enforcement
-* tidak ada versioning state
-* tidak ada atomic update
-
-➡️ Ini rawan:
-
-* race condition
-* overwrite state
-* ghost bug
-
----
-
-## ❌ 3. Skill system belum benar-benar “learning system”
-
-Kamu sudah define:
+Contoh dari file kamu:
 
 
+Masalahnya:
 
-Tapi implementasi kamu kemungkinan masih:
+* `updateSkillStats()` tidak dijamin dipanggil di semua path eksekusi
+* tidak ada **hard enforcement** setelah executor
+* tidak ada **failure feedback loop yang kuat**
 
-* store skill
-* execute skill
+### Fix (WAJIB)
 
-Belum:
-
-* kompetisi antar skill
-* eliminasi skill buruk
-* adaptasi real-time
-
-➡️ Artinya:
-👉 ini masih **skill registry**, bukan **evolution system**
-
----
-
-## ❌ 4. Planner terlalu “LLM-heavy”, kurang deterministic guard
-
-Dari:
-
-
-
-Masalah:
-
-* planner bisa hallucinate capability
-* tidak ada hard validation sebelum execution
-* tidak ada capability contract enforcement
-
-➡️ ini akan:
-
-* bikin skill gagal
-* chain error ke executor
-
----
-
-## ❌ 5. DSL belum cukup expressive untuk real reasoning
-
-Dari:
-
-
-
-Sekarang:
-
-* sequential
-* basic ops
-* mcp_call
-
-Belum ada:
-
-* branching serius
-* loop
-* composition kuat
-
-➡️ agent kamu:
-👉 masih linear, bukan reasoning
-
----
-
-## ❌ 6. Tidak ada “feedback loop global”
-
-Kamu punya:
-
-* evaluator
-* critic
-* reinforcement
-
-Tapi:
-
-👉 tidak ada global learning signal
-
-Contoh:
-
-* planner tidak belajar dari failure executor
-* generator tidak belajar dari critic
-* mutation tidak dipandu real failure
-
----
-
-# 🟡 2. PERBAIKAN KRITIS (WAJIB IMPLEMENT)
-
-Saya kasih langsung patch-level, bukan teori.
-
----
-
-## ✅ FIX 1 — UNIFIED CONTRACT (WAJIB)
-
-### Problem:
-
-semua agent beda format
-
-### Solusi:
-
-Buat 1 contract universal:
+Tambahkan wrapper global:
 
 ```ts
-type AgentMessage = {
-  goal: string;
+async function executeWithLearning(skill, input) {
+  const result = await runDSL(skill.json, input);
 
-  capability?: string;
+  const validation = validate(skill.output_schema, result);
 
-  plan?: {
-    steps: {
-      capability: string;
-      input: any;
-    }[];
-  };
+  const success = validation.valid;
 
-  execution?: {
-    result?: any;
-    error?: string;
-  };
+  await updateSkillStats(skill, success);
 
-  evaluation?: {
-    score: number;
-    valid: boolean;
-  };
-
-  metadata?: {
-    iteration: number;
-    trace_id: string;
-  };
-};
-```
-
-👉 Semua agent WAJIB pakai ini.
-
----
-
-## ✅ FIX 2 — BLACKBOARD HARUS IMMUTABLE + VERSIONED
-
-Upgrade dari:
-
-
-
-### Ganti:
-
-```ts
-class BlackboardStore {
-  constructor() {
-    this.state = {};
-  }
-
-  set(patch) {
-    this.state = { ...this.state, ...patch };
-  }
+  return result;
 }
 ```
 
-### Jadi:
-
-```ts
-class BlackboardStore {
-  constructor() {
-    this.state = {};
-    this.version = 0;
-  }
-
-  get() {
-    return { ...this.state, _version: this.version };
-  }
-
-  set(patch) {
-    this.state = { ...this.state, ...patch };
-    this.version++;
-  }
-
-  safeSet(patch, expectedVersion) {
-    if (this.version !== expectedVersion) {
-      throw new Error("State conflict");
-    }
-
-    this.set(patch);
-  }
-}
-```
-
-👉 ini mencegah race condition
+👉 Semua eksekusi harus lewat ini. Jangan kasih bypass.
 
 ---
 
-## ✅ FIX 3 — SKILL SELECTION HARUS PAKAI BANDIT (BUKAN SORT)
+## 2. ❌ Capability matching terlalu naive
 
-Dari:
-
-
-
-Sekarang kamu:
+Kamu masih pakai:
 
 ```ts
-skills.sort((a, b) => b.score - a.score)[0];
+where: { capability: normalizeCapability(capability) }
 ```
 
-❌ ini salah → pure exploitation
+Ini fatal.
 
----
+Dampak:
 
-### Ganti:
+* skill duplication
+* agent terus bikin skill baru
+* tidak pernah reuse
+
+### Fix (WAJIB → upgrade ke hybrid search)
 
 ```ts
-function selectSkill(skills) {
-  const total = skills.reduce((s, x) => s + x.usage_count, 0);
+async function findBestSkill(queryEmbedding) {
+  const skills = await Skill.findAll();
 
   return skills
     .map(s => ({
       skill: s,
-      score:
-        s.score +
-        1.2 * Math.sqrt(Math.log(total + 1) / (s.usage_count + 1))
+      sim: cosineSimilarity(queryEmbedding, s.embedding)
     }))
-    .sort((a, b) => b.score - a.score)[0].skill;
+    .sort((a, b) => b.sim - a.sim)[0];
 }
 ```
 
-👉 ini bikin sistem kamu benar-benar “belajar”
+Gabungkan dengan score:
+
+```ts
+final =
+  sim * 0.6 +
+  skill.score * 0.3 +
+  freshness(skill) * 0.1;
+```
+
+👉 ini sudah kamu tulis, tapi belum enforce di pipeline.
 
 ---
 
-## ✅ FIX 4 — VALIDATE PLAN SEBELUM EXECUTE
+## 3. ❌ Executor belum cukup aman (masih raw vm)
 
-Tambahkan guard:
+Dari implementasi kamu:
+
+```ts
+const script = new vm.Script(skill.logic);
+```
+
+Masalah:
+
+* tidak ada timeout
+* tidak ada memory control
+* tidak ada op whitelist
+
+Padahal kamu sendiri sudah desain DSL + MCP
+
+
+### Fix (WAJIB)
+
+Jangan jalankan string bebas.
+Gunakan interpreter berbasis step:
+
+```ts
+for (const step of skill.logic) {
+  await executeStep(step, ctx);
+}
+```
+
+👉 Buang model “string logic execution”.
+
+---
+
+## 4. ❌ Tidak ada HARD VALIDATION sebelum save skill
+
+Saat ini:
+
+```ts
+if (score >= 0.8) save()
+```
+
+Ini terlalu lemah.
+
+### Masalah:
+
+* skill invalid tetap masuk
+* schema mismatch lolos
+
+### Fix:
+
+```ts
+if (!validateDSL(skill)) return reject;
+
+if (!validateSchema(skill.input_schema)) return reject;
+
+if (!validateSchema(skill.output_schema)) return reject;
+```
+
+Tambahkan:
+
+```ts
+if (evaluation.score < 0.8) reject;
+if (!evaluation.valid) reject;
+```
+
+---
+
+## 5. ❌ Mutation system berpotensi chaos
+
+Dari file mutation:
+
+
+Masalah:
+
+* random mutation tanpa constraint kuat
+* tidak ada semantic check
+* bisa merusak skill bagus
+
+### Fix (WAJIB FILTER)
+
+```ts
+if (skill.score < 0.6) return; // jangan mutate skill jelek
+
+if (skill.usage_count < 5) return; // belum cukup data
+```
+
+Tambahkan:
+
+```ts
+if (!validateDSL(mutated)) discard;
+```
+
+---
+
+## 6. ❌ Blackboard system belum ada concurrency control
+
+Dari implementasi kamu:
+
+
+Masalah:
+
+* race condition
+* overwrite state
+* tidak ada locking
+
+### Fix:
+
+```ts
+class BlackboardStore {
+  constructor() {
+    this.lock = false;
+  }
+
+  async safeSet(patch) {
+    while (this.lock) await wait(1);
+    this.lock = true;
+
+    this.state = { ...this.state, ...patch };
+
+    this.lock = false;
+  }
+}
+```
+
+👉 Ini minimal. Production: pakai queue.
+
+---
+
+## 7. ❌ Planner bisa hallucinate capability
+
+Dari planner system kamu:
+
+
+Masalah:
+
+* LLM bebas bikin capability
+* executor akan gagal diam-diam
+
+### Fix:
 
 ```ts
 function validatePlan(plan, capabilities) {
   for (const step of plan.steps) {
     if (!capabilities.includes(step.capability)) {
-      return false;
+      throw new Error("Invalid capability");
     }
   }
-  return true;
 }
 ```
 
-Di pipeline:
-
-```ts
-if (!validatePlan(plan, capabilityList)) {
-  throw new Error("Invalid plan");
-}
-```
-
-👉 ini menghilangkan hallucination planner
-
 ---
 
-## ✅ FIX 5 — DSL WAJIB SUPPORT BRANCHING
+## 8. ❌ Tidak ada “episode memory reuse”
 
-Sekarang belum cukup.
+Padahal kamu sudah desain ini.
 
-Tambahkan:
+Masalah:
 
-```ts
-{
-  "op": "if",
-  "condition": "a > b",
-  "then": [...],
-  "else": [...]
-}
-```
-
-Executor:
-
-```ts
-case "if":
-  const cond = evalCondition(step.condition, ctx);
-
-  const branch = cond ? step.then : step.else;
-
-  for (const s of branch) {
-    await executeStep(s, ctx);
-  }
-  break;
-```
-
-👉 tanpa ini = bukan reasoning engine
-
----
-
-## ✅ FIX 6 — GLOBAL LEARNING LOOP (INI YANG PALING PENTING)
-
-Tambahkan ini:
-
-```ts
-async function globalLearning({
-  plan,
-  result,
-  evaluation
-}) {
-  await updateSkillStats(plan, evaluation.valid);
-
-  if (!evaluation.valid) {
-    await logFailure(plan, result);
-  }
-
-  if (evaluation.score > 0.85) {
-    await reinforcePlanPattern(plan);
-  }
-}
-```
-
-👉 semua agent harus “kena feedback ini”
-
----
-
-# 🔵 3. MASALAH ARSITEKTUR LANJUTAN
-
----
-
-## ⚠️ 1. Mutation kamu masih “random”, bukan guided
-
-Dari:
-
-
-
-Sekarang:
-
-```ts
-Math.random()
-```
-
-❌ ini bodoh (no signal)
-
----
-
-### Perbaiki:
-
-```ts
-function mutateSkill(skill, feedback) {
-  if (feedback.includes("missing step")) {
-    // tambah step
-  }
-
-  if (feedback.includes("wrong operator")) {
-    // ubah operator spesifik
-  }
-
-  return skill;
-}
-```
-
-👉 mutation harus driven by critic
-
----
-
-## ⚠️ 2. Tidak ada CAPABILITY EMBEDDING FILTER
-
-Kamu sudah mention vector DB (file lain), tapi:
-
-👉 belum dipakai sebagai hard filter
-
----
+* sistem tidak benar-benar belajar dari pengalaman
+* semua task dianggap baru
 
 ### Fix:
 
 ```ts
-const candidates = await vectorSearch(input, topK=5);
+async function tryReuse(input) {
+  const emb = embed(input);
 
-const filtered = candidates.filter(
-  s => s.score > 0.5
-);
+  const episodes = await findSimilarEpisodes(emb);
+
+  if (episodes.length > 0 && episodes[0].score > 0.8) {
+    return episodes[0];
+  }
+
+  return null;
+}
 ```
 
 ---
 
-## ⚠️ 3. Tidak ada COST / LATENCY AWARENESS
+# 🟡 MASALAH STRUKTURAL (AKAN JADI BOTTLENECK)
 
-Semua plan dianggap sama.
+## 9. Skill registry belum scalable
 
-Padahal:
+Sekarang:
 
-* MCP call mahal
-* DSL cepat
+* linear scan
+* tidak ada index
+
+### Fix:
+
+* vector DB (faiss / pgvector)
+* index capability
 
 ---
 
-### Fix scoring:
+## 10. Tidak ada cost control
+
+Dengan MCP + mutation:
+
+👉 sistem kamu bisa:
+
+* spam API
+* CPU explode
+
+### Fix:
 
 ```ts
-finalScore =
-  (quality * 0.5) +
-  (latencyScore * 0.2) +
-  (successRate * 0.3);
+MAX_STEPS = 10
+MAX_MCP_CALL = 3
+TIMEOUT = 200ms
 ```
 
 ---
 
-# 🧠 4. REALITY CHECK (INI PENTING)
+## 11. Evaluator terlalu dangkal
+
+Sekarang:
+
+```ts
+if (result !== undefined) score += 0.4;
+```
+
+Ini lemah.
+
+### Fix:
+
+Tambahkan:
+
+```ts
+correctness = deepCompare(expected, result)
+```
+
+---
+
+# 🟢 BAGIAN YANG SUDAH BAGUS (INI JARANG ORANG PUNYA)
+
+Jujur:
+
+Kamu sudah punya fondasi yang **lebih maju dari 90% orang**:
+
+✅ DSL executor
+✅ MCP integration
+✅ multi-agent (planner/executor/critic) 
+✅ blackboard system 
+✅ hierarchical planning 
+✅ curiosity + goal system 
+
+Masalahnya bukan ide.
+
+👉 Masalahnya: **belum dikunci jadi sistem deterministic**
+
+---
+
+# 🔥 PRIORITAS PERBAIKAN (JANGAN NGACO URUTANNYA)
+
+Kalau kamu loncat-loncat → sistem kamu hancur.
+
+## STEP 1 (WAJIB)
+
+* executor DSL (bukan vm string)
+* validator schema + DSL
+
+## STEP 2
+
+* capability search (embedding + ranking)
+
+## STEP 3
+
+* learning loop (update + decay + prune)
+
+## STEP 4
+
+* planner guardrail (capability whitelist)
+
+## STEP 5
+
+* mutation + bandit (baru masuk sini)
+
+---
+
+# 🚨 REALITY CHECK
 
 Sekarang sistem kamu:
 
-✅ modular
-✅ adaptive
-✅ evolving
+👉 “terlihat seperti AI agent”
 
-Tapi belum:
+Tapi sebenarnya:
 
-❌ robust
-❌ stable
-❌ production-safe
+👉 **belum self-improving system**
 
----
+Kalau kamu implement fix di atas:
 
-# 🔥 5. PRIORITAS IMPLEMENTASI (JANGAN NGACO)
-
-Urutan yang benar:
-
-### 1. (WAJIB)
-
-* unified contract
-* plan validation
-* executor stability
-
-### 2.
-
-* skill memory + bandit
-* global learning loop
-
-### 3.
-
-* DSL branching + composition
-
-### 4.
-
-* mutation guided + exploration
-
-### 5.
-
-* blackboard + scheduler (kalau belum solid → jangan lanjut)
+👉 baru berubah jadi:
+**adaptive + evolving system**
 
 ---
 
-# 🚀 6. KESIMPULAN
+# 🎯 NEXT STEP PALING KRITIS
 
-Sistem kamu:
+Kalau kamu serius mau ini hidup:
 
-👉 sudah masuk kategori **advanced prototype**
+👉 bilang:
 
-Tapi belum:
+**"refactor executor DSL jadi full interpreter + secure runtime"**
 
-👉 **production-grade autonomous agent**
+Karena:
+
+> kalau executor salah
+> semua layer di atasnya = ilusi saja
 
 ---
 
-Kalau kamu mau saya lanjut:
-
-pilih satu (jangan serakah):
-
-* “refactor executor + DSL jadi production-safe”
-* “buat capability embedding + vector search yang bener”
-* “implement guided mutation + evolution loop”
-* “hardening blackboard + scheduler (anti race + deadlock)”
-
-Saya akan paksa kamu benerin sampai level sistem, bukan sekadar konsep.
+Kalau kamu mau, saya bisa lanjut **bedah langsung struktur repo kamu (file per file)** dan kasih patch konkret (bukan teori).
