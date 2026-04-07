@@ -1,280 +1,178 @@
-Saya sudah “scan” isi file kamu (arsitektur + DSL + planner + evolution loop, dll). Masalahnya jelas: **desain kamu sudah advanced, tapi implementasi masih setengah matang dan belum konsisten antar layer**.
+Saya sudah membaca struktur yang kamu kirim (bukan sekadar lihat sekilas). Secara konsep, arsitektur kamu **sudah masuk kategori advanced agent system**, tapi implementasinya masih banyak “lubang fatal” yang bikin ini belum bisa benar-benar mencapai tujuan: *self-improving autonomous agent*.
 
-Saya akan langsung ke kritik keras + perbaikan konkret (dengan kode yang bisa langsung kamu tempel).
+Saya akan langsung ke poin kritis + perbaikan konkret (dengan kode yang bisa langsung kamu tempel).
 
 ---
 
-# ⚠️ MASALAH UTAMA (KRITIS)
+# 🔴 1. MASALAH PALING KRITIS (FOUNDATION FAILURE)
 
-## 1. ❌ Over-architecture, under-execution
+## ❌ 1.1 Sistem kamu terlalu “design-heavy”, belum “execution-solid”
 
-Kamu punya:
+Dari file yang kamu punya:
 
-* planner tree search
-* blackboard
-* bandit
-* mutation
-* curiosity
+* planner ✅
+* critic ✅
+* mutation ✅
+* blackboard ✅
+* curiosity ✅
 
 Tapi:
 
-* executor belum kuat
-* validator belum strict
-* test system lemah
+👉 **executor + validator + test system belum jadi core yang kuat**
 
-👉 Ini kebalik.
+Padahal ini jantung sistem.
 
-> Sistem agent itu 80% engineering runtime, bukan LLM.
+Kalau ini lemah:
 
-📌 Ini juga sudah di-highlight di desain kamu sendiri: executor + validator + test itu core 
+> semua layer di atas cuma simulasi AI
 
 ---
 
-## 2. ❌ Skill quality tidak dikontrol ketat
+## 🔧 FIX WAJIB
 
-Kamu sudah punya:
+Tambahkan **execution contract enforcement layer**
 
-* score
-* reinforcement
-* decay
+### sebelum execute:
 
-Tapi:
+```ts
+function validateStep(step, capabilities) {
+  if (!capabilities.includes(step.capability)) {
+    throw new Error(`Invalid capability: ${step.capability}`);
+  }
 
-* evaluator masih naive
-* test case terlalu lemah
-* tidak ada deterministic benchmark
-
-👉 Akibatnya:
-skill jelek tetap survive
+  if (typeof step.input !== "object") {
+    throw new Error("Invalid step input");
+  }
+}
+```
 
 ---
 
-## 3. ❌ Blackboard ada, tapi belum “controlled system”
+### patch ke executor kamu:
+
+```ts
+async function executePlan(plan, input, capabilities) {
+  let ctx = input;
+
+  for (const step of plan.steps) {
+    validateStep(step, capabilities); // 🔴 WAJIB
+
+    ctx = await runCapability(step.capability, step.input, ctx);
+  }
+
+  return ctx;
+}
+```
+
+---
+
+# 🔴 2. SKILL SYSTEM KAMU BELUM “SURVIVE”
+
+Dari sistem learning kamu :
 
 Masalah:
 
-* race condition
-* agent bisa overwrite state sembarangan
-* tidak ada locking/version
-
-Padahal ini sudah diperingatkan di desain 
+* score update terlalu linear
+* tidak ada confidence
+* tidak ada uncertainty
 
 ---
 
-## 4. ❌ Planner terlalu bebas (hallucination risk)
+## 🔧 FIX: Tambahkan CONFIDENCE + UNCERTAINTY
 
-Planner:
-
-* bisa generate capability yang tidak ada
-* tidak enforce capability registry
-
-👉 ini fatal
-
----
-
-## 5. ❌ Mutation system berpotensi chaos
-
-Mutation:
-
-* random
-* tidak berbasis failure pattern
-* tidak ada constraint semantic
-
-Padahal kamu sendiri sudah warning soal chaos 
-
----
-
-## 6. ❌ Tidak ada “execution trace system”
-
-Kamu tidak punya:
-
-* step-by-step trace
-* debug replay
-* failure logging
-
-👉 Ini bikin agent tidak bisa benar-benar “belajar”
-
----
-
-# 🔧 PERBAIKAN PRIORITAS (WAJIB URUT)
-
-Saya tidak akan kasih semuanya. Ini urutan yang benar.
-
----
-
-# ✅ 1. FIX EXECUTOR (PALING KRITIS)
-
-Masalah kamu:
-
-* belum deterministic
-* belum traceable
-
-## 🔥 Tambahkan TRACE SYSTEM
+Upgrade schema:
 
 ```ts
-export async function runDSL(skill, input) {
-  const ctx = {
-    input,
-    output: {},
-    memory: {},
-    trace: []
-  };
+confidence: DataTypes.FLOAT,
+uncertainty: DataTypes.FLOAT,
+```
 
-  for (const step of skill.logic) {
-    const before = JSON.parse(JSON.stringify(ctx.memory));
+---
 
-    await executeStep(step, ctx);
+### update logic:
 
-    ctx.trace.push({
-      step,
-      before,
-      after: JSON.parse(JSON.stringify(ctx.memory))
-    });
-  }
+```ts
+function updateStats(skill, success) {
+  const alpha = 0.1;
+
+  const reward = success ? 1 : 0;
+
+  const newScore =
+    (1 - alpha) * skill.score +
+    alpha * reward;
+
+  const uncertainty =
+    Math.sqrt(1 / (skill.usage_count + 1));
 
   return {
-    output: ctx.output,
-    trace: ctx.trace
+    score: newScore,
+    uncertainty
   };
 }
 ```
 
-👉 Ini WAJIB kalau kamu mau learning system.
+👉 ini bikin sistem kamu:
+
+* lebih stabil
+* tidak overfit cepat
 
 ---
 
-# ✅ 2. HARD VALIDATION (STOP SKILL SAMPAH)
+# 🔴 3. BANDIT STRATEGY SUDAH ADA — TAPI SALAH LEVEL
 
-Tambahkan validator sebelum skill masuk DB:
+Kamu pakai UCB 
+Masalah:
 
-```ts
-function validateSkillStructure(skill) {
-  if (!skill.name || !skill.capability) return false;
-  if (!Array.isArray(skill.logic)) return false;
+👉 kamu pakai di **skill selection**, bukan **plan selection**
 
-  for (const step of skill.logic) {
-    if (!step.op) return false;
-  }
-
-  return true;
-}
-```
-
-Integrasi:
-
-```ts
-if (!validateSkillStructure(skill)) {
-  throw new Error("Invalid skill structure");
-}
-```
+Ini salah.
 
 ---
 
-# ✅ 3. TEST SYSTEM (INI YANG BIKIN AGENT “BELAJAR”)
-
-Masalah kamu: test terlalu dangkal.
-
-## 🔥 Upgrade test builder
+## 🔧 FIX: pindahkan bandit ke PLAN LEVEL
 
 ```ts
-function buildTestCases(skill) {
-  return [
-    { input: {} },
-    { input: null },
-    { input: { edge: true } },
-    { input: { random: Math.random() } }
-  ];
+function planScore(plan, stats, totalRuns) {
+  return (
+    stats.score +
+    1.2 * Math.sqrt(Math.log(totalRuns) / (stats.usage + 1))
+  );
 }
 ```
 
 ---
 
-## 🔥 Tambahkan FAILURE LOG
+### di orchestrator:
 
 ```ts
-async function testSkill(skill) {
-  const tests = buildTestCases(skill);
-
-  let passed = 0;
-  const failures = [];
-
-  for (const t of tests) {
-    try {
-      const res = await runDSL(skill, t.input);
-
-      const valid = validate(skill.output_schema, res.output).valid;
-
-      if (valid) {
-        passed++;
-      } else {
-        failures.push({ input: t.input, res });
-      }
-    } catch (e) {
-      failures.push({ input: t.input, error: e.message });
-    }
-  }
-
-  return {
-    passRate: passed / tests.length,
-    failures
-  };
-}
+const bestPlan = plans
+  .map(p => ({
+    plan: p,
+    score: planScore(p, getStats(p), totalRuns)
+  }))
+  .sort((a, b) => b.score - a.score)[0].plan;
 ```
+
+👉 dampak:
+
+* eksplorasi lebih meaningful
+* bukan cuma ganti skill kecil
 
 ---
 
-# ✅ 4. FIX SKILL SELECTION (STOP HALU)
+# 🔴 4. BLACKBOARD SYSTEM KAMU BERBAHAYA (RACE CONDITION)
 
-Sekarang kamu masih naive.
+Dari implementasi kamu :
 
-## 🔥 Tambahkan capability whitelist
+Masalah:
 
-```ts
-async function safeSelectSkill(capability) {
-  const skills = await Skill.findAll({
-    where: { capability }
-  });
-
-  if (skills.length === 0) return null;
-
-  return skills
-    .filter(s => s.score > 0.5)
-    .sort((a, b) => b.score - a.score)[0];
-}
-```
+* `set()` langsung overwrite
+* tidak ada versioning
+* tidak ada locking
 
 ---
 
-# ✅ 5. FIX MUTATION (JANGAN RANDOM DOANG)
-
-Masalah kamu: mutation tidak berbasis error.
-
-## 🔥 Mutation berbasis failure
-
-```ts
-function mutateFromFailure(skill, failures) {
-  const newSkill = JSON.parse(JSON.stringify(skill));
-
-  if (failures.length === 0) return newSkill;
-
-  const target = newSkill.logic[0];
-
-  // contoh: fallback fix
-  if (target.op === "get") {
-    target.op = "set";
-  }
-
-  return newSkill;
-}
-```
-
-👉 Jangan mutate blind.
-
----
-
-# ✅ 6. BLACKBOARD LOCKING (ANTI CHAOS)
-
-Tambahkan versioning:
+## 🔧 FIX: Tambahkan VERSION CONTROL
 
 ```ts
 class BlackboardStore {
@@ -284,13 +182,11 @@ class BlackboardStore {
   }
 
   set(patch) {
-    this.state = { ...this.state, ...patch };
     this.version++;
-  }
 
-  get() {
-    return {
+    this.state = {
       ...this.state,
+      ...patch,
       _version: this.version
     };
   }
@@ -299,81 +195,237 @@ class BlackboardStore {
 
 ---
 
-# ✅ 7. ADD EXECUTION MEMORY (INI YANG BELUM ADA)
-
-Kamu belum punya episodic memory real.
-
-## 🔥 Tambahkan:
+## 🔧 FIX: CAS (compare-and-set)
 
 ```ts
-const Episode = sequelize.define("Episode", {
-  goal: DataTypes.STRING,
-  plan: DataTypes.JSON,
-  result: DataTypes.JSON,
-  success: DataTypes.BOOLEAN,
-  score: DataTypes.FLOAT
-});
+function safeUpdate(bb, expectedVersion, patch) {
+  if (bb.state._version !== expectedVersion) {
+    return false; // reject
+  }
+
+  bb.set(patch);
+  return true;
+}
 ```
 
-Integrasi:
+👉 ini mencegah:
+
+* state corruption
+* agent saling tabrak
+
+---
+
+# 🔴 5. HIERARCHICAL PLANNER BELUM TERKONTROL
+
+Dari design kamu :
+
+Masalah:
+
+* tidak ada cost control
+* tidak ada pruning
+* tidak ada plan caching
+
+---
+
+## 🔧 FIX: tambahkan COST MODEL
 
 ```ts
-await Episode.create({
-  goal: input,
-  plan,
-  result,
+function estimateCost(plan) {
+  return plan.steps.length * 0.1;
+}
+```
+
+---
+
+### reject plan mahal:
+
+```ts
+if (estimateCost(plan) > 1.0) {
+  return null;
+}
+```
+
+---
+
+## 🔧 FIX: PLAN CACHE
+
+```ts
+const planCache = new Map();
+
+function cachePlan(goal, plan) {
+  planCache.set(goal, plan);
+}
+
+function getCachedPlan(goal) {
+  return planCache.get(goal);
+}
+```
+
+👉 kamu sudah punya arah ke episodic memory, tapi belum dipakai efektif
+
+---
+
+# 🔴 6. MUTATION SYSTEM MASIH NAIVE
+
+Dari implementasi kamu :
+
+Masalah:
+
+* random mutation
+* tidak guided
+* tidak aware failure
+
+---
+
+## 🔧 FIX: FAILURE-DRIVEN MUTATION
+
+```ts
+function mutateBasedOnFailure(skill, failure) {
+  const newSkill = structuredClone(skill);
+
+  if (failure.type === "schema_error") {
+    newSkill.logic.push({
+      op: "normalize_output"
+    });
+  }
+
+  if (failure.type === "missing_step") {
+    newSkill.logic.unshift({
+      op: "validate_input"
+    });
+  }
+
+  return newSkill;
+}
+```
+
+👉 ini jauh lebih kuat dibanding random
+
+---
+
+# 🔴 7. KAMU BELUM PUNYA “GLOBAL OBJECTIVE FUNCTION”
+
+Sekarang sistem kamu optimize:
+
+* skill score
+* plan score
+* execution
+
+Tapi tidak ada:
+
+👉 **global optimization target**
+
+---
+
+## 🔧 FIX: GLOBAL SCORE
+
+```ts
+function globalScore({
   success,
-  score
-});
+  latency,
+  cost
+}) {
+  return (
+    success * 0.6 +
+    (1 / (1 + latency)) * 0.2 +
+    (1 / (1 + cost)) * 0.2
+  );
+}
 ```
 
-👉 Ini foundation untuk plan reuse.
+---
+
+Gunakan ini di:
+
+* plan selection
+* skill update
+* mutation evaluation
 
 ---
 
-# ⚠️ HAL YANG JANGAN KAMU LANJUTKAN DULU
+# 🔴 8. SYSTEM KAMU BELUM “SELF-CORRECTING”
 
-Jangan lanjut ke:
+Sekarang:
 
-* ❌ curiosity system
-* ❌ world model
-* ❌ self-modifying code
+* planner bikin plan
+* critic nilai
 
-Kalau ini belum stabil:
+Tapi:
 
-* executor
-* validator
-* test system
-
-👉 Kalau dipaksa → sistem kamu collapse.
+👉 tidak ada feedback masuk ke **capability model**
 
 ---
 
-# 🧠 DIAGNOSIS AKHIR
+## 🔧 FIX: UPDATE CAPABILITY EMBEDDING
 
-Sistem kamu sekarang:
+```ts
+async function updateCapabilityEmbedding(skill, feedback) {
+  const improvedDesc =
+    skill.description + " " + feedback.join(" ");
 
-✔ Arsitektur: 9/10
-❌ Implementasi: 4/10
+  skill.embedding = await embed(improvedDesc);
 
-Masalahnya bukan ide.
-Masalahnya kamu lompat ke layer “AI canggih” tanpa mengunci core system.
-
----
-
-# 🎯 NEXT STEP PALING BENAR
-
-Kalau kamu serius:
-
-Pilih satu:
-
-1. “perbaiki executor jadi DSL full engine”
-2. “buat test system yang proper (property-based + fuzzing)”
-3. “buat capability embedding + vector search yang bener”
+  await skill.save();
+}
+```
 
 ---
 
-Kalau kamu mau, saya bisa:
-👉 bongkar repo kamu per file (bukan konsep) dan kasih patch spesifik per file (diff-style, siap commit)
+# 🔴 9. REALITY CHECK (INI PENTING)
 
-Tapi itu harus step-by-step, bukan sekaligus.
+Sistem kamu saat ini:
+
+✔ modular
+✔ adaptive
+✔ evolving
+
+Tapi belum:
+
+❌ stable
+❌ efficient
+❌ production-safe
+
+---
+
+# 🧠 SUMMARY (JUJUR)
+
+Yang sudah bagus:
+
+* arsitektur sangat lengkap
+* sudah masuk level research-grade design
+* semua komponen besar sudah ada
+
+Yang bermasalah:
+
+* eksekusi belum kuat
+* kontrol sistem kurang
+* learning belum benar-benar robust
+
+---
+
+# 🎯 PRIORITAS PERBAIKAN (URUTAN WAJIB)
+
+Jangan lompat.
+
+1. **Executor + Validator HARDENING**
+2. **Blackboard consistency (version + CAS)**
+3. **Plan-level bandit (bukan skill-level)**
+4. **Failure-driven mutation**
+5. **Global scoring system**
+6. **Plan cache + cost control**
+
+---
+
+Kalau kamu lanjut tanpa ini:
+
+👉 sistem kamu akan terlihat “pintar”, tapi sebenarnya tidak belajar
+
+---
+
+Kalau kamu mau saya lanjut, pilih satu:
+
+* “bedah executor biar production-grade”
+* “refactor blackboard jadi distributed-safe”
+* “bikin evaluator yang beneran bisa ngajarin agent”
+
+Saya akan paksa kamu ke implementasi, bukan teori lagi.
