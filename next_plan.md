@@ -1,419 +1,429 @@
-Berikut **kritik keras + actionable berdasarkan isi CHANGELOG.md (RAW)** dan dibandingkan dengan planning kamu.
+Berikut **critical audit terhadap perubahan (CHANGELOG vs implementasi nyata)** berdasarkan:
 
-Saya tidak akan ulang isi — langsung ke **gap + perbaikan + contoh input/output konkret**.
-
----
-
-# 🔴 MASALAH UTAMA: CHANGELOG = OVERCLAIM TANPA EVIDENCE
-
-CHANGELOG kamu menunjukkan:
-
-> “sudah implement”:
-
-* DSL advanced
-* planner (tree + hierarchical + LLM)
-* multi-agent
-* memory
-* curiosity
-* self-modifying
-
-👉 Tapi dari struktur deskripsi:
-
-❗ Tidak ada bukti bahwa sistem ini:
-
-* pernah jalan end-to-end
-* pernah menghasilkan output nyata
-* pernah lolos test
+* Planning docs (file 2–23 yang kamu upload)
+* DSL evolution + architecture layers
+* (tidak terlihat adanya bukti implementasi penuh di repo → ini jadi fokus utama)
 
 ---
 
-# 🔴 MASALAH #1 — TIDAK ADA DEFINISI “DONE”
-
-### ❌ Problem
-
-Semua entry seperti:
-
-```
-added X system
-implemented Y
-```
-
-👉 Tidak ada:
-
-* input apa?
-* output apa?
-* expected behavior?
+# 🚨 TEMUAN KRITIS (BERDASARKAN GAP)
 
 ---
 
-## ✅ FIX
+## ❌ 1. DSL SUDAH DIDESAIN KOMPLEKS — TAPI EXECUTOR REAL BELUM TERBUKTI LENGKAP
 
-Ubah setiap fitur jadi **contract testable**
+### Evidence dari planning:
 
-### 🔧 Contoh perbaikan
+* Basic DSL ops (get/set/add) 
+* Async MCP integration 
+* Branching (if, jump, compare) 
+* Map/filter/reduce
 
-#### SEBELUM
+### Problem:
+
+Tidak ada bukti bahwa:
+
+* Semua op ini benar-benar terintegrasi dalam **1 executor unified**
+* Tidak ada validator DSL
+* Tidak ada instruction safety layer
+
+👉 Ini red flag:
+**DSL berkembang lebih cepat daripada runtime**
+
+---
+
+### 🔧 FIX (WAJIB)
+
+**File target (harus ada):**
 
 ```
-added planner system
+/core/executor.ts
 ```
 
-#### SESUDAH
+### Issue:
 
-```json
-{
-  "feature": "planner",
-  "input": "jumlahkan angka dari API",
-  "expected_plan": [
-    "api.fetch",
-    "array.map",
-    "array.sum"
-  ],
-  "expected_output": {
-    "result": 100
+Executor kemungkinan masih fragmented (per feature)
+
+### Fix:
+
+Gabungkan semua op ke satu dispatcher + validator:
+
+```ts
+const ALLOWED_OPS = new Set([
+  "get","set","add","subtract","multiply","divide","concat",
+  "mcp_call","compare","if","jump","map","filter","reduce"
+]);
+
+function validateStep(step) {
+  if (!ALLOWED_OPS.has(step.op)) {
+    throw new Error(`Invalid op: ${step.op}`);
   }
 }
 ```
 
----
+Tambahkan sebelum execute:
 
-# 🔴 MASALAH #2 — AUTONOMOUS LOOP TIDAK TERBUKTI
-
-Dari design kamu: 
-
-Loop wajib:
-
-```
-generate → test → evaluate → improve → store
-```
-
----
-
-### ❌ Problem
-
-CHANGELOG tidak pernah menunjukkan:
-
-* skill dibuat
-* skill diuji
-* skill disimpan
-* skill dipakai ulang
-
----
-
-## ✅ FIX (WAJIB)
-
-Tambahkan **real execution trace**
-
-### 🔧 Input
-
-```json
-{
-  "task": "jumlahkan 2 angka"
-}
-```
-
-### 🔧 Output (HARUS ADA)
-
-```json
-{
-  "skill_created": "math.add",
-  "test_cases": [
-    { "input": { "a": 1, "b": 2 }, "output": 3 }
-  ],
-  "evaluation": {
-    "score": 1.0,
-    "valid": true
-  },
-  "stored": true
-}
-```
-
-👉 Kalau ini tidak ada → **bukan autonomous agent**
-
----
-
-# 🔴 MASALAH #3 — PLANNER TIDAK PUNYA VALIDASI OUTPUT
-
-### ❌ Problem
-
-Planner kamu (tree search / LLM) hanya generate plan
-
-
-👉 Tapi:
-
-* tidak ada bukti plan dieksekusi
-* tidak ada bukti output benar
-
----
-
-## ✅ FIX
-
-Tambahkan **input-output contract**
-
-### 🔧 Input
-
-```json
-{
-  "goal": "ambil data API lalu jumlahkan"
-}
-```
-
-### 🔧 Expected Output
-
-```json
-{
-  "plan": [
-    { "capability": "api.fetch" },
-    { "capability": "array.sum" }
-  ],
-  "execution_result": {
-    "sum": 120
-  },
-  "valid": true
+```ts
+for (const step of skill.logic) {
+  validateStep(step);
 }
 ```
 
 ---
 
-# 🔴 MASALAH #4 — MEMORY TIDAK TERBUKTI DIGUNAKAN
+## ❌ 2. MCP ADA DI DSL — TAPI BELUM ADA ISOLATION LAYER
 
-Planning kamu punya:
+### Evidence:
 
-* episodic memory 
-* skill memory 
+* MCP design ada 
+* Tapi tidak ada:
 
----
-
-### ❌ Problem
-
-CHANGELOG:
-👉 hanya bilang “added memory”
-
-❌ tidak ada:
-
-* reuse example
-* hit rate
-* retrieval evidence
+  * rate limit
+  * timeout
+  * whitelist enforcement runtime
 
 ---
 
-## ✅ FIX
+### Problem:
 
-### 🔧 Input (run ke-2)
+Agent bisa:
 
-```json
-{
-  "task": "jumlahkan angka dari API"
+* spam API
+* hang execution
+* inject tool misuse
+
+---
+
+### 🔧 FIX
+
+**File:**
+
+```
+/core/mcp.ts
+```
+
+### Tambahkan guard:
+
+```ts
+const ALLOWED_TOOLS = ["http.get","http.post","json.parse"];
+
+async function safeMcpCall(tool, args) {
+  if (!ALLOWED_TOOLS.includes(tool)) {
+    throw new Error("Tool not allowed");
+  }
+
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("timeout")), 5000)
+  );
+
+  return Promise.race([
+    mcp[tool](args),
+    timeout
+  ]);
 }
 ```
 
-### 🔧 Expected Output
+Dan di executor:
 
-```json
-{
-  "memory_reused": true,
-  "retrieved_plan_id": "episode_123",
-  "execution_time": "reduced"
-}
+```ts
+const result = await safeMcpCall(tool, resolvedArgs);
 ```
 
 ---
 
-# 🔴 MASALAH #5 — MULTI-AGENT = HANYA KONSEP
+## ❌ 3. BRANCHING SUDAH ADA — TAPI TIDAK ADA LOOP GUARD GLOBAL
 
-Planning kamu:
+### Evidence:
 
+* map/filter/reduce punya counter limit
+* tapi executor utama tidak punya global step limit
 
 ---
 
-### ❌ Problem
+### Problem:
+
+Infinite loop sangat mungkin terjadi dari:
+
+* jump
+* if branching
+
+---
+
+### 🔧 FIX
+
+Di executor utama:
+
+```ts
+let stepsExecuted = 0;
+const MAX_STEPS = 1000;
+
+while (ip < steps.length) {
+  if (stepsExecuted++ > MAX_STEPS) {
+    throw new Error("Execution limit exceeded");
+  }
+```
+
+---
+
+## ❌ 4. SKILL LEARNING SYSTEM (DECAY, REINFORCEMENT) BELUM TERHUBUNG KE EXECUTION
+
+### Evidence:
+
+* Skill memory design lengkap 
+
+### Problem:
 
 Tidak ada bukti:
 
-* Planner dipanggil
-* Executor jalan
-* Critic memberi score
+* executor memanggil updateSkillStats
+* evaluator terhubung ke DB
+
+👉 berarti:
+**learning = tidak terjadi**
 
 ---
 
-## ✅ FIX
+### 🔧 FIX
 
-Tambahkan **trace multi-agent**
+**File:**
 
-### 🔧 Output WAJIB
+```
+/core/runtime.ts
+```
 
-```json
-{
-  "planner": {
-    "plans_generated": 3
-  },
-  "executor": {
-    "selected_plan": "plan_1",
-    "result": { "value": 42 }
-  },
-  "critic": {
-    "score": 0.9,
-    "accepted": true
+Tambahkan hook setelah execution:
+
+```ts
+const result = await runDSL(skill.json, input);
+
+const valid = validate(skill.output_schema, result);
+
+await updateSkillStats(skill, valid);
+
+return result;
+```
+
+---
+
+## ❌ 5. BANDIT + MUTATION ADA DI DESIGN — TAPI TIDAK MASUK PIPELINE
+
+### Evidence:
+
+* UCB1 strategy 
+
+### Problem:
+
+Tidak ada:
+
+* selector integration
+* mutation trigger
+
+---
+
+### 🔧 FIX
+
+Ganti skill selection:
+
+```ts
+const skills = await registry.findAll(capability);
+
+const selected = await selectSkillWithBandit(skills);
+```
+
+Tambahkan exploration:
+
+```ts
+if (Math.random() < strategy.exploration_rate) {
+  const mutated = mutateSkill(selected.json);
+  const score = await testSkill(mutated);
+
+  if (score > selected.score) {
+    await createNewVersion(selected, mutated);
   }
 }
 ```
 
 ---
 
-# 🔴 MASALAH #6 — SELF-MODIFYING = PALING BERBAHAYA
+## ❌ 6. PLANNER TREE SEARCH + LLM LOOP TIDAK TERHUBUNG KE EXECUTOR
 
-Planning kamu: 
+### Evidence:
+
+* tree search 
+* LLM planner/critic 
+
+### Problem:
+
+Tidak ada orchestrator nyata yang:
+
+* menjalankan loop lengkap
+* bridging planner → executor → critic
 
 ---
 
-### ❌ Problem
+### 🔧 FIX
 
-CHANGELOG claim sudah ada
-👉 tapi tidak ada:
+**File:**
 
-* before vs after
-* test result
-* rollback
+```
+/core/orchestrator.ts
+```
+
+Implement minimal:
+
+```ts
+const plans = await plannerLLM(input);
+
+const bestPlan = await treeSearch(plans);
+
+const result = await executePlan(bestPlan, input);
+
+const critique = await criticLLM(input, bestPlan, result);
+```
 
 ---
 
-## ✅ FIX
+## ❌ 7. MULTI-AGENT + BLACKBOARD = MASIH KONSEP
 
-### 🔧 Input
+### Evidence:
 
-```json
-{
-  "problem": "low success rate"
+* blackboard system 
+* scheduler 
+
+### Problem:
+
+Tidak ada:
+
+* event loop nyata
+* agent isolation
+
+---
+
+### 🔧 FIX
+
+Minimal scheduler:
+
+```ts
+while (state.status !== "done") {
+  const runnable = agents
+    .filter(a => a.canRun(state))
+    .sort((a, b) => computePriority(b, state) - computePriority(a, state));
+
+  const agent = runnable[0];
+
+  await agent.run(state);
 }
 ```
 
-### 🔧 Output
+---
 
-```json
-{
-  "modification": {
-    "target": "strategy",
-    "change": "increase exploration_rate to 0.3"
-  },
-  "before_score": 0.45,
-  "after_score": 0.62,
-  "accepted": true
+## ❌ 8. WORLD MODEL + SIMULATION + CURIOSITY = BELUM TERINTEGRASI
+
+### Evidence:
+
+* world model 
+* simulation 
+* curiosity 
+
+### Problem:
+
+Tidak ada:
+
+* updateBelief dipanggil
+* simulation sebelum execution
+* goal queue dipakai
+
+---
+
+### 🔧 FIX
+
+Pipeline:
+
+```ts
+const imagined = await imaginePlans(plans, bb);
+
+const best = imagined[0];
+
+const result = await executePlan(best.plan, input);
+
+updateBelief(bb.belief, result);
+updateWorld(bb.world, result);
+```
+
+---
+
+## ❌ 9. META-REASONING + SELF-MODIFICATION = HIGH RISK, NO GUARD
+
+### Evidence:
+
+* meta reasoning 
+* self-modifying 
+
+### Problem:
+
+Belum ada:
+
+* sandbox enforcement real
+* rollback enforcement
+* audit log
+
+👉 ini sangat berbahaya
+
+---
+
+### 🔧 FIX
+
+WAJIB:
+
+```ts
+if (mod.target === "executor") {
+  throw new Error("Forbidden modification");
 }
 ```
 
----
+Tambahkan audit log:
 
-# 🔴 MASALAH #7 — TIDAK ADA MINIMUM WORKING SYSTEM
-
-Kamu langsung lompat ke:
-
-* curiosity
-* imagination
-* meta reasoning
-
----
-
-### ❌ Problem
-
-Tanpa ini dulu:
-
-```
-input → skill → output
+```ts
+await AuditLog.create({
+  mod,
+  result: "accepted",
+  score_diff: newScore - oldScore
+});
 ```
 
-👉 semua layer atas = useless
+---
+
+# 🚨 KESIMPULAN KERAS
+
+## Sistem kamu sekarang:
+
+### ❌ BUKAN autonomous agent
+
+### ❌ BELUM self-improving
+
+### ❌ BELUM learning system
 
 ---
 
-## ✅ FIX (RESET PRIORITY)
+## Sistem kamu saat ini:
 
-### 🔧 Minimal working flow
-
-### Input
-
-```json
-{
-  "task": "2 + 3"
-}
-```
-
-### Output
-
-```json
-{
-  "result": 5,
-  "used_skill": "math.add"
-}
-```
-
-👉 Kalau ini belum stabil:
-❌ STOP semua feature advanced
+👉 **"Spec-driven architecture dengan implementasi parsial"**
 
 ---
 
-# 🔥 KESIMPULAN PALING JUJUR
+# 🔥 PRIORITAS PERBAIKAN (WAJIB URUT)
 
-CHANGELOG kamu:
-
-> ❗ bukan log implementasi
-> ❗ tapi roadmap yang ditulis seolah sudah selesai
-
----
-
-# 🚨 STATUS REAL SYSTEM (BERDASARKAN CHANGELOG)
-
-| Layer       | Status                    |
-| ----------- | ------------------------- |
-| DSL         | ⚠️ mungkin ada            |
-| Executor    | ❌ belum terbukti          |
-| Planner     | ❌ belum terbukti          |
-| Memory      | ❌ belum terbukti          |
-| Autonomy    | ❌ tidak ada bukti         |
-| Multi-agent | ❌ kemungkinan belum jalan |
+1. **Executor stabil (DSL full support + guard)**
+2. **Skill execution + evaluation hook**
+3. **Skill registry + bandit selection**
+4. **Planner → Executor → Critic loop**
+5. **Memory (episodic + skill stats)**
 
 ---
 
-# 🎯 ROADMAP PERBAIKAN (WAJIB IKUTI)
+Kalau kamu mau, next step gue bisa:
 
-## STEP 1 — Buktikan EXECUTION
+👉 audit langsung isi repo file per file (real code, bukan design)
+👉 dan tandain bagian yang fake / belum jalan
 
-* input → output jalan
-
-## STEP 2 — Tambahkan SKILL
-
-* reusable + testable
-
-## STEP 3 — Tambahkan LOOP
-
-* generate → test → store
-
-## STEP 4 — Tambahkan PLANNER
-
-## STEP 5 — Baru MEMORY
-
-## STEP 6 — Baru autonomy (goal, curiosity)
-
----
-
-# 🚀 NEXT STEP
-
-Kalau kamu mau upgrade serius:
-
-👉 Kirim file:
-
-* executor (real code)
-* planner
-* registry
-
-Saya akan:
-
-* cek apakah benar-benar jalan
-* tandai fake implementation
-* kasih patch langsung (code siap commit)
-
----
-
-Ini penting:
-
-> Saat ini sistem kamu terlihat **“advanced di atas kertas”**
-> tapi kemungkinan besar **belum hidup di runtime**.
+Itu bakal jauh lebih brutal (dan lebih akurat).
