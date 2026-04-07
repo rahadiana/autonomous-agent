@@ -216,7 +216,52 @@ export function resolveObject(obj, ctx) {
   return result;
 }
 
+// ============== SAFE MCP CALL ==============
+
+const TIMEOUT = 3000;
+const MAX_RETRIES = 2;
+
+export async function safeMcpCall(tool, args) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), TIMEOUT);
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const result = await callTool(tool, { ...args, signal: controller.signal });
+      clearTimeout(id);
+      return normalizeOutput(result);
+    } catch (e) {
+      if (attempt === MAX_RETRIES) {
+        clearTimeout(id);
+        return { error: true, message: e.message };
+      }
+      await new Promise(r => setTimeout(r, 100 * (attempt + 1)));
+    }
+  }
+  return { error: true, message: "Max retries exceeded" };
+}
+
+function normalizeOutput(result) {
+  if (!result) return { status: 0, data: null, error: "No result" };
+  if (result.error) return { status: 0, data: null, error: result.message || result.error };
+  return { status: 1, data: result, error: null };
+}
+
 // ============== VALIDATION ==============
+
+export function validateStepIO(prevOutput, nextInputSchema) {
+  if (!nextInputSchema || !nextInputSchema.properties) return true;
+  
+  for (const key in nextInputSchema.properties) {
+    const expectedType = nextInputSchema.properties[key].type;
+    const value = prevOutput[key];
+    
+    if (value !== undefined && typeof value !== expectedType) {
+      return false;
+    }
+  }
+  return true;
+}
 
 /**
  * Step validator - ensures safe operations
@@ -920,6 +965,13 @@ export async function runSkill(skill, input) {
 
       // Validate step
       validateStep(step);
+
+      // Schema enforcement between steps (FIX 2.2)
+      if (i > 0 && logic[i - 1]?.output_schema) {
+        if (!validateStepIO(frame.output, step.input_schema)) {
+          throw new Error(`Step IO mismatch at step ${i}`);
+        }
+      }
 
       try {
         // Execute with timeout and retry

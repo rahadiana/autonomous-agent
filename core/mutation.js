@@ -337,3 +337,54 @@ export function getMutationConfig() {
 export function updateMutationConfig(updates) {
   Object.assign(MUTATION_CONFIG, updates);
 }
+
+/**
+ * A/B Testing for Anti-Regression
+ * Compares old vs new skill on test cases before accepting
+ * 
+ * @param {Object} oldSkill - Original skill
+ * @param {Object} newSkill - Mutated skill
+ * @param {Array} testCases - Test cases to evaluate
+ * @param {Function} runDSL - Function to execute skill
+ * @returns {Object} { accept: boolean, oldScore, newScore, reason }
+ */
+export async function compareSkills(oldSkill, newSkill, testCases, runDSL) {
+  let oldScore = 0;
+  let newScore = 0;
+
+  for (const testCase of testCases) {
+    try {
+      const oldResult = await runDSL(oldSkill, testCase.input);
+      const newResult = await runDSL(newSkill, testCase.input);
+
+      oldScore += evaluateSingle(oldResult, testCase.expected);
+      newScore += evaluateSingle(newResult, testCase.expected);
+    } catch (e) {
+      oldScore += 0;
+      newScore += 0;
+    }
+  }
+
+  const avgOld = testCases.length > 0 ? oldScore / testCases.length : 0;
+  const avgNew = testCases.length > 0 ? newScore / testCases.length : 0;
+
+  return {
+    accept: avgNew > avgOld,
+    oldScore: avgOld,
+    newScore: avgNew,
+    reason: avgNew > avgOld ? "improvement" : "no_improvement"
+  };
+}
+
+function evaluateSingle(result, expected) {
+  if (!result) return expected === null ? 1 : 0;
+  if (expected === null) return result.error ? 1 : 0;
+  
+  const actual = result.result ?? result.value ?? result;
+  const exp = expected.result ?? expected.value ?? expected;
+  
+  if (typeof actual === "number" && typeof exp === "number") {
+    return Math.abs(actual - exp) < 1e-9 ? 1 : 0;
+  }
+  return actual === exp ? 1 : 0;
+}

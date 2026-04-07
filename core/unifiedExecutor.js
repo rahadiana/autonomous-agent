@@ -32,6 +32,15 @@ export function validatePlan(plan, capabilities = []) {
     }
   }
 
+  // Also validate each step in bestPath
+  if (plan.bestPath && capabilities.length > 0) {
+    for (const step of plan.bestPath) {
+      if (step.capability && !capabilities.includes(step.capability)) {
+        return { valid: false, error: `Step capability '${step.capability}' not in available capabilities` };
+      }
+    }
+  }
+
   return { valid: true };
 }
 
