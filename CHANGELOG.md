@@ -2,7 +2,7 @@
 
 ## Test Results - 2026-04-07
 
-All **226 tests passed** (duration: ~2010ms)
+All **226 tests passed** (duration: ~1867ms)
 
 ---
 
@@ -419,6 +419,6 @@ All **226 tests passed** (duration: ~2010ms)
 | Total Tests | 226 |
 | Passed | 226 |
 | Failed | 0 |
-| Duration | ~2010ms |
+| Duration | ~1867ms |
 
 **All tests passed!** ✅
