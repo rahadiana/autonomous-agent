@@ -199,6 +199,187 @@ const newScore = 0.6;
 
 ---
 
+## 7. Bandit Score (core/bandit.js)
+
+### Test: banditScore
+```javascript
+// Input
+const skill = { score: 0.8, usage_count: 1 };
+const total = 10;
+
+// Output
+{ score: 0.8, explore: 0.47, total: 0.8 + 0.47 = 1.27 }
+```
+
+### Test: selectSkill
+```javascript
+// Input
+const skills = [
+  { id: "s1", score: 0.9, usage_count: 10 },
+  { id: "s2", score: 0.7, usage_count: 1 }
+];
+
+// Output - selects s2 due to exploration bonus
+{ selected: "s2" }
+```
+
+---
+
+## 8. Call Skill (core/executor.js)
+
+### Test: call_skill executes nested skill
+```javascript
+// Input
+const skill = {
+  logic: [{
+    op: "call_skill",
+    skill: "add_two",
+    input: { a: "$input.a", b: "$input.b" }
+  }]
+};
+const input = { a: 3, b: 4 };
+
+// Output
+{ result: 7 }
+```
+
+### Test: call_skill_map executes skill for each item
+```javascript
+// Input
+const skill = {
+  logic: [{
+    op: "call_skill_map",
+    collection: [1, 2, 3],
+    skill: "double",
+    input_key: "item"
+  }]
+};
+
+// Output
+{ results: [2, 4, 6] }
+```
+
+---
+
+## 9. Executor DSL (core/executorDSL.test.js)
+
+### Test: Basic add operation
+```javascript
+// Input
+const skill = {
+  logic: [
+    { op: "set", path: "x", value: 5 },
+    { op: "add", a: "$memory.x", b: 3, to: "result" }
+  ]
+};
+
+// Output
+{ x: 5, result: 8 }
+```
+
+### Test: Conditional execution (if)
+```javascript
+// Input
+const skill = {
+  logic: [
+    { op: "set", path: "value", value: 10 },
+    {
+      op: "if",
+      condition: { comparison: { left: "$memory.value", op: "gt", right: 5 } },
+      branches: {
+        then: [{ op: "set", path: "status", value: "high" }]
+      }
+    }
+  ]
+};
+
+// Output
+{ value: 10, status: "high" }
+```
+
+### Test: For loop
+```javascript
+// Input
+const skill = {
+  logic: [
+    { op: "set", path: "items", value: [1, 2, 3] },
+    {
+      op: "for",
+      collection: "$memory.items",
+      var: "item",
+      steps: [{ op: "set", path: "temp", value: "$memory.item" }]
+    }
+  ]
+};
+
+// Output
+{ items: [1, 2, 3], temp: 3 }
+```
+
+---
+
+## 10. Validator (core/validator.test.js)
+
+### Test: Schema validation
+```javascript
+// Input
+const schema = { required: ["name"], properties: { name: "string", age: "number" } };
+const data = { name: "John", age: 30 };
+
+// Output
+{ valid: true, errors: [] }
+
+// Input (missing required)
+const data = { age: 30 };
+
+// Output
+{ valid: false, errors: ["Missing required field: name"] }
+
+// Input (type mismatch)
+const data = { name: "John", age: "30" };
+
+// Output
+{ valid: false, errors: ["Field age expected type number, got string"] }
+```
+
+---
+
+## 11. Versioning (core/versioning.test.js)
+
+### Test: createVersion
+```javascript
+// Input
+const skill = { id: "skill_1", version: 1, logic: [] };
+
+// Output
+{
+  id: "skill_1",
+  version: 2,
+  parent_id: "skill_1",
+  created_at: 1712486400000
+}
+```
+
+---
+
+## 12. VectorStore (core/vectorStore.test.js)
+
+### Test: VectorStore add and search
+```javascript
+// Input
+const vs = new VectorStore(3);
+vs.add("doc1", [1, 0, 0]);
+vs.add("doc2", [0, 1, 0]);
+
+// Search
+vs.search([1, 0, 0], 1);
+
+// Output
+[{ id: "doc1", score: 1 }]
+```
+
+---
+
 ## Summary
 
 | Fix | File | Status |
@@ -209,5 +390,11 @@ const newScore = 0.6;
 | Capability Enforcement | core/planner.js | ✅ |
 | Blackboard Versioning | core/blackboard.js | ✅ |
 | Mutation with Test Gate | core/mutation.js | ✅ |
+| Bandit Strategy | core/bandit.js | ✅ |
+| Call Skill | core/executor.js | ✅ |
+| Executor DSL | core/executor.js | ✅ |
+| Validator | core/validator.js | ✅ |
+| Versioning | core/versioning.js | ✅ |
+| VectorStore | core/vectorStore.js | ✅ |
 
 **Total: 226 tests PASSED**
