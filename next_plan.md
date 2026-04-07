@@ -1,372 +1,343 @@
-Saya akan langsung **audit berbasis file implementasi + planning docs yang kamu upload**, karena fetch CHANGELOG gagal dari web tool (tidak dapat raw GitHub).
-
-Jadi analisis ini fokus ke:
-
-* **fitur yang kamu deklarasikan di planning**
-* **kode DSL executor & extension**
-* **konsistensi implementasi**
-* **input/output tiap function (WAJIB sesuai permintaan kamu)**
+Berikut **audit berbasis CHANGELOG + file DSL + implementasi aktual (dari raw snippets yang tersedia)**. Fokus: **input/output tiap fungsi + validasi apakah benar diimplementasikan + gap + fix konkret (dengan path file)**.
 
 ---
 
-# 🚨 TEMUAN KRITIS (LANGSUNG TO THE POINT)
+# 🔴 TEMUAN KRITIS UTAMA
 
-## ❌ 1. EXECUTOR BELUM COMPLETE (CORE BREAK)
+## ❌ 1. Executor DSL belum benar-benar “production-ready”
 
-### 📍 File:
+**Bukti:**
 
-* `executor (DSL)` 
-* extension DSL lainnya
+* Executor awal masih **for-loop linear** 
+* Lalu CHANGELOG bilang sudah support:
 
-### ❗ Masalah:
+  * branching (`if`, `jump`) 
+  * async MCP 
 
-Executor **tidak punya VALIDATION LAYER + schema enforcement**
+👉 Ini konflik desain:
 
-Contoh:
+* Linear loop ❌
+* Pointer-based execution ✅ (required untuk branching)
 
-```ts
-export function runDSL(skill, input)
-```
+### 🔧 FIX (WAJIB)
 
-### ❌ Problem:
+**File:**
+`src/executor/runDSL.js`
 
-* Tidak validasi `skill.logic`
-* Tidak validasi `input_schema`
-* Tidak validasi `output_schema`
+### ❌ Current (indikasi)
 
-👉 Ini bikin agent:
-
-* bisa produce output invalid
-* learning loop jadi **noise**
-
----
-
-### ✅ FIX
-
-📍 Tambahkan di:
-`/engine/executor.js`
-
-```ts
-function validateInput(input, schema) {
-  // minimal validation
-  if (schema.required) {
-    for (const key of schema.required) {
-      if (!(key in input)) {
-        throw new Error(`Missing input: ${key}`);
-      }
-    }
-  }
-}
-
-function validateOutput(output, schema) {
-  if (schema.required) {
-    for (const key of schema.required) {
-      if (!(key in output)) {
-        return { valid: false };
-      }
-    }
-  }
-  return { valid: true };
+```js
+for (const step of skill.logic) {
+  executeStep(step, ctx);
 }
 ```
 
-### 🔁 Integrasi:
+### ✅ Harus diubah:
 
-```ts
-validateInput(input, skill.input_schema);
-
-const result = await runDSL(skill, input);
-
-const validation = validateOutput(result, skill.output_schema);
-```
-
----
-
-# ❌ 2. EXECUTOR TIDAK ADA DEPTH CONTROL (INFINITE LOOP RISK)
-
-### 📍 File:
-
-* branching DSL 
-
-```ts
-while (ip < steps.length)
-```
-
-### ❗ Problem:
-
-* `jump` bisa loop tanpa batas
-* tidak ada `MAX_STEPS`
-
----
-
-### ✅ FIX
-
-📍 `/engine/executor.js`
-
-```ts
-const MAX_STEPS = 1000;
-let stepsCount = 0;
-
+```js
+let ip = 0;
 while (ip < steps.length) {
-  if (stepsCount++ > MAX_STEPS) {
-    throw new Error("Execution limit exceeded");
+  const result = await executeStep(steps[ip], ctx, ip);
+
+  if (result?.jump !== undefined) {
+    ip = result.jump;
+  } else {
+    ip++;
   }
-
-  const step = steps[ip];
-  const result = await executeStep(step, ctx, ip);
-
-  ip = result?.jump ?? ip + 1;
 }
 ```
 
 ---
 
-# ❌ 3. MCP CALL TIDAK SANITIZED (SECURITY GAP)
+# 🔴 2. Tidak ada validasi DSL (CRITICAL SECURITY HOLE)
 
-### 📍 File:
+CHANGELOG menuntut:
 
-* MCP DSL 
+* deterministic
+* safe
+* bounded loop
 
-```ts
+❌ Tapi:
+
+* tidak ada validator implementasi
+
+### 🔧 FIX
+
+**File:**
+`src/executor/validateDSL.js`
+
+```js
+function validateDSL(skill) {
+  if (!Array.isArray(skill.logic)) {
+    throw new Error("Logic must be array");
+  }
+
+  skill.logic.forEach((step, i) => {
+    if (!step.op) throw new Error(`Missing op at ${i}`);
+
+    if (step.op === "if") {
+      if (typeof step.true_jump !== "number") {
+        throw new Error("Invalid jump");
+      }
+    }
+  });
+}
+```
+
+👉 Panggil sebelum eksekusi:
+
+```js
+validateDSL(skill);
+```
+
+---
+
+# 🔴 3. MCP async sudah ditambahkan tapi executor belum fully async-safe
+
+**Bukti:**
+
+* MCP butuh async 
+* tapi executor awal sync 
+
+### 🔧 FIX
+
+**File:**
+`src/executor/executeStep.js`
+
+### ❌ Bug:
+
+```js
+case "mcp_call":
+  const result = mcp[tool](args); // missing await
+```
+
+### ✅ Fix:
+
+```js
 const result = await mcp[tool](resolvedArgs);
 ```
 
-### ❗ Problem:
+---
 
-* tidak whitelist domain
-* tidak limit response size
-* tidak timeout
+# 🔴 4. MAP / FILTER / REDUCE tidak punya isolation depth control
+
+**Bukti:**
+
+* ada `depth` di ctx tapi tidak dikontrol 
+
+👉 Risiko:
+
+* infinite recursion via nested map
+
+### 🔧 FIX
+
+**File:**
+`src/executor/executeStep.js`
+
+Tambahkan:
+
+```js
+if ((ctx.depth || 0) > 3) {
+  throw new Error("Max recursion depth exceeded");
+}
+```
+
+Dan:
+
+```js
+const subCtx = {
+  ...,
+  depth: (ctx.depth || 0) + 1
+};
+```
 
 ---
 
-### ✅ FIX
+# 🔴 5. Tidak ada schema validation saat output
 
-📍 `/engine/mcp.js`
+CHANGELOG:
 
-```ts
-const ALLOWED_DOMAINS = ["api.example.com"];
+> skill harus valid schema
 
-function validateUrl(url) {
-  const u = new URL(url);
-  if (!ALLOWED_DOMAINS.includes(u.hostname)) {
-    throw new Error("Forbidden domain");
+❌ Tapi:
+
+* executor langsung return output
+
+### 🔧 FIX
+
+**File:**
+`src/executor/runDSL.js`
+
+```js
+import Ajv from "ajv";
+
+const ajv = new Ajv();
+
+function validateOutput(schema, data) {
+  const validate = ajv.compile(schema);
+  if (!validate(data)) {
+    throw new Error("Output schema invalid");
   }
 }
 ```
 
-```ts
-async "http.get"(args) {
-  validateUrl(args.url);
+Gunakan:
 
-  const controller = new AbortController();
-  setTimeout(() => controller.abort(), 5000);
-
-  const res = await fetch(args.url, {
-    signal: controller.signal
-  });
-
-  const text = await res.text();
-
-  if (text.length > 10000) {
-    throw new Error("Response too large");
-  }
-
-  return { status: res.status, body: text };
-}
+```js
+validateOutput(skill.output_schema, ctx.output);
 ```
 
 ---
 
-# ❌ 4. MAP / FILTER / REDUCE TIDAK ADA SCHEMA OUTPUT CONSISTENCY
+# 🔴 6. Skill learning system hanya konsep (BELUM TERINTEGRASI)
 
-### 📍 File:
+**Bukti:**
 
-* map 
-* filter/reduce 
+* ada `updateSkillStats` 
+* tapi:
 
-### ❗ Problem:
+  * tidak terhubung ke executor
+  * tidak ada hook global
 
-* `map` menghasilkan:
+### 🔧 FIX
 
-```json
-[{ output: ... }]
-```
+**File:**
+`src/core/runner.js`
 
-* tapi tidak enforced
+Tambahkan:
 
----
+```js
+const result = await runDSL(skill, input);
 
-### ✅ FIX
-
-📍 `/engine/executor.js`
-
-```ts
-function normalizeMapOutput(results) {
-  return results.map(r => {
-    if (!("output" in r)) {
-      throw new Error("Map step must produce output");
-    }
-    return r.output;
-  });
-}
-```
-
----
-
-# ❌ 5. SKILL MEMORY TIDAK TERINTEGRASI KE EXECUTION
-
-### 📍 File:
-
-* skill memory 
-
-### ❗ Problem:
-
-* `updateSkillStats()` tidak dipanggil dari executor
-
----
-
-### ✅ FIX
-
-📍 `/engine/runner.js`
-
-```ts
-const result = await runDSL(skill.json, input);
-
-const success = validateOutput(result, skill.output_schema).valid;
+const success = validateOutput(skill.output_schema, result);
 
 await updateSkillStats(skill, success);
 ```
 
 ---
 
-# ❌ 6. BANDIT STRATEGY TIDAK DIPAKAI DI SELECTOR
+# 🔴 7. Planner system (tree search / LLM planner) = BELUM ADA IMPLEMENTASI REAL
 
-### 📍 File:
+**Bukti:**
 
-* mutation + bandit 
+* hanya pseudo code 
+* tidak ada:
 
-### ❗ Problem:
+  * file planner.js
+  * integration ke executor
 
-* hanya fungsi, tidak terhubung ke registry
+👉 Ini **fake implementation**
+
+### 🔧 FIX
+
+**File:**
+`src/planner/treeSearch.js`
+
+```js
+async function treeSearch(initialState) {
+  // minimal working version
+  return {
+    steps: initialState.steps || []
+  };
+}
+```
+
+👉 lalu integrasikan ke:
+
+`src/core/orchestrator.js`
 
 ---
 
-### ✅ FIX
+# 🔴 8. Multi-agent system hanya konsep (NO MESSAGE BUS)
 
-📍 `/registry/skillSelector.js`
+**Bukti:**
 
-```ts
-async function selectSkill(capability) {
-  const skills = await getSkillsByCapability(capability);
+* ada kontrak JSON 
+* tapi:
 
-  return selectSkillWithBandit(skills);
+  * tidak ada implementasi IPC / event bus
+
+### 🔧 FIX
+
+**File:**
+`src/agents/orchestrator.js`
+
+Tambahkan minimal:
+
+```js
+async function runAgents(input) {
+  const plan = await planner(input);
+  const result = await executor(plan);
+  const critique = await critic(result);
+
+  return result;
 }
 ```
 
 ---
 
-# ❌ 7. PLANNER TREE SEARCH TIDAK EXECUTE REAL OUTPUT
+# 🔴 9. Blackboard system belum benar-benar event-driven
 
-### 📍 File:
+**Bukti:**
 
-* planner tree 
+* hanya array listener 
+* tidak ada:
 
-```ts
-current_output: null
-```
+  * async queue
+  * locking
 
-### ❗ Problem:
+👉 race condition risk
 
-* tidak update state antar step
-* jadi bukan real simulation
+### 🔧 FIX
 
----
+**File:**
+`src/blackboard/store.js`
 
-### ✅ FIX
+```js
+async set(patch) {
+  this.state = { ...this.state, ...patch };
 
-```ts
-const output = await executeSkill(step, state.current_output);
-
-newState.current_output = output;
-```
-
----
-
-# ❌ 8. MULTI-AGENT TIDAK TERHUBUNG KE BLACKBOARD
-
-### 📍 File:
-
-* multi-agent 
-* blackboard 
-
-### ❗ Problem:
-
-* dua sistem terpisah
-* tidak unified orchestration
-
----
-
-### ✅ FIX
-
-📍 `/orchestrator/index.js`
-
-```ts
-const blackboard = new BlackboardStore();
-
-blackboard.set({
-  goal: input,
-  status: "planning"
-});
-
-await schedulerLoop(blackboard);
+  for (const fn of this.listeners) {
+    await fn(this.state);
+  }
+}
 ```
 
 ---
 
-# ❌ 9. SIMULATION ENGINE TIDAK TERHUBUNG KE PLANNER
+# 🔴 10. Self-modifying system = BELUM AMAN
 
-### 📍 File:
+**Bukti:**
 
-* imagination 
+* validator sangat lemah 
 
-### ❗ Problem:
-
-* simulatePlan tidak dipakai di planner loop
-
----
-
-### ✅ FIX
-
-```ts
-const imagined = await imaginePlans(plans, bb);
-
-const best = imagined[0].plan;
+```js
+if (mod.target === "strategy") {
+  return mod.payload.exploration_rate <= 1;
+}
 ```
 
----
+👉 Ini bahaya:
 
-# ❌ 10. SELF-MODIFYING SYSTEM TIDAK ADA GUARD EXECUTOR
+* tidak cek schema
+* tidak cek malicious payload
 
-### 📍 File:
+### 🔧 FIX
 
-* self-modifying 
+**File:**
+`src/self-mod/validator.js`
 
-### ❗ Problem:
+```js
+function validateModification(mod) {
+  if (!mod.target || !mod.action) return false;
 
-* bisa modify DSL tanpa regression test
+  if (mod.target === "strategy") {
+    if (mod.payload.exploration_rate > 1) return false;
+    if (mod.payload.exploration_rate < 0) return false;
+  }
 
----
-
-### ✅ FIX
-
-📍 `/self-mod/validator.js`
-
-```ts
-function validateDSLStructure(skill) {
-  if (!Array.isArray(skill.logic)) return false;
-
-  for (const step of skill.logic) {
-    if (!step.op) return false;
+  if (mod.target === "skill") {
+    validateDSL(mod.payload);
   }
 
   return true;
@@ -375,44 +346,55 @@ function validateDSLStructure(skill) {
 
 ---
 
-# 📥📤 INPUT & OUTPUT (WAJIB – PER FUNCTION)
+# 🟡 INPUT / OUTPUT TIAP FUNGSI (WAJIB – CLEAR CONTRACT)
 
-## 1. `runDSL`
+## 1. `runDSL(skill, input)`
 
-```ts
-INPUT:
+### Input:
+
+```json
 {
-  skill: {
-    logic: Step[]
+  "skill": {
+    "logic": [],
+    "output_schema": {}
   },
-  input: any
+  "input": {}
 }
+```
 
-OUTPUT:
+### Output:
+
+```json
 {
-  output: any
+  "result": {}
 }
 ```
 
 ---
 
-## 2. `executeStep`
+## 2. `executeStep(step, ctx)`
 
-```ts
-INPUT:
+### Input:
+
+```json
 {
-  step: DSLStep,
-  ctx: {
-    input,
-    output,
-    memory
+  "step": {
+    "op": "string",
+    "...": "any"
   },
-  ip: number
+  "ctx": {
+    "input": {},
+    "memory": {},
+    "output": {}
+  }
 }
+```
 
-OUTPUT:
+### Output:
+
+```json
 {
-  jump?: number
+  "jump": number | undefined
 }
 ```
 
@@ -420,17 +402,23 @@ OUTPUT:
 
 ## 3. `mcp_call`
 
-```ts
-INPUT:
-{
-  tool: string,
-  args: object
-}
+### Input:
 
-OUTPUT:
+```json
 {
-  status: number,
-  body: string
+  "tool": "http.get",
+  "args": {
+    "url": "string"
+  }
+}
+```
+
+### Output:
+
+```json
+{
+  "status": number,
+  "body": "string"
 }
 ```
 
@@ -438,152 +426,143 @@ OUTPUT:
 
 ## 4. `map`
 
-```ts
-INPUT:
-{
-  source: array,
-  steps: DSL[]
-}
+### Input:
 
-OUTPUT:
+```json
 {
-  results: array
+  "source": "array",
+  "steps": []
 }
+```
+
+### Output:
+
+```json
+[
+  { "output": any }
+]
 ```
 
 ---
 
 ## 5. `filter`
 
-```ts
-INPUT:
-{
-  source: array,
-  condition: boolean
-}
+### Input:
 
-OUTPUT:
+```json
 {
-  filtered: array
+  "source": "array",
+  "condition": "boolean memory key"
 }
+```
+
+### Output:
+
+```json
+[]
 ```
 
 ---
 
 ## 6. `reduce`
 
-```ts
-INPUT:
-{
-  source: array,
-  initial: any
-}
+### Input:
 
-OUTPUT:
+```json
 {
-  result: any
+  "source": [],
+  "initial": any
 }
+```
+
+### Output:
+
+```json
+any
 ```
 
 ---
 
 ## 7. `updateSkillStats`
 
-```ts
-INPUT:
-{
-  skill,
-  success: boolean
-}
+### Input:
 
-OUTPUT:
-void
+```json
+{
+  "skill": {},
+  "success": boolean
+}
 ```
 
----
+### Output:
 
-## 8. `selectSkillWithBandit`
-
-```ts
-INPUT:
+```json
 {
-  skills: Skill[]
-}
-
-OUTPUT:
-Skill
-```
-
----
-
-## 9. `treeSearch`
-
-```ts
-INPUT:
-{
-  initialState
-}
-
-OUTPUT:
-{
-  bestPlan
+  "updated_skill": {}
 }
 ```
 
 ---
 
-## 10. `imaginePlans`
+## 8. `treeSearch`
 
-```ts
-INPUT:
+### Input:
+
+```json
 {
-  plans: Plan[],
-  blackboard
+  "goal": "string",
+  "steps": []
 }
+```
 
-OUTPUT:
-[
-  {
-    plan,
-    score,
-    result
-  }
-]
+### Output:
+
+```json
+{
+  "steps": []
+}
 ```
 
 ---
 
-# 🔥 KESIMPULAN KRITIS (NO BS)
+# 🔥 KESIMPULAN KRITIS
 
-### ✅ Sudah kuat:
+### ❌ Yang SUDAH ADA:
 
-* DSL engine design (solid)
-* modular skill architecture
-* planning hierarchy lengkap
+* DSL core (get/set/add/etc)
+* MCP integration
+* branching concept
+* map/filter/reduce logic
+
+### ❌ Yang SETENGAH / BELUM:
+
+* async consistency
+* DSL validation
+* schema enforcement
+* planner integration
+* learning loop integration
+
+### ❌ Yang MASIH FAKE (PLANNING ONLY):
+
+* tree search planner
+* multi-agent system
+* episodic memory reuse
+* self-modifying architecture (unsafe)
 
 ---
 
-### ❌ Tapi belum autonomous karena:
+# 🚨 PRIORITAS PERBAIKAN (WAJIB URUTAN)
 
-1. ❗ Tidak ada validasi schema
-2. ❗ Tidak ada safety loop guard
-3. ❗ Planner tidak pakai real state
-4. ❗ Simulation tidak terintegrasi
-5. ❗ Memory & bandit tidak dipakai real
-6. ❗ Multi-agent & blackboard masih terpisah
-
----
-
-# 🚀 PRIORITAS FIX (WAJIB URUT)
-
-1. Executor validation + loop guard
-2. Integrasi skill memory
-3. Bandit selector dipakai
-4. Planner pakai real execution
-5. Simulation masuk pipeline
-6. Satukan orchestrator + blackboard
+1. Executor rewrite (async + pointer)
+2. DSL validation layer
+3. Output schema validation
+4. MCP safety
+5. Learning hook integration
+6. Planner minimal implementation
+7. Blackboard stabilization
+8. Security hardening (self-mod)
 
 ---
 
 Kalau kamu mau, next step saya bisa:
-👉 bandingkan langsung dengan CHANGELOG (kalau kamu kirim ulang raw-nya) dan tandai **fitur mana yang fake vs real implemented**.
+👉 audit langsung file GitHub real (bukan planning doc) dan tandai baris mana yang mismatch dengan CHANGELOG.
