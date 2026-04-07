@@ -24,13 +24,23 @@ const MUTATION_CONFIG = {
 
 /**
  * Check if skill should be mutated
- * Based on usage, history, and performance
+ * Based on usage, history, performance, AND FAILURE RATE
  * 
  * @param {Object} skill - Skill to check
  * @param {Array} allSkills - All skills for percentile calculation
  * @returns {Object} { shouldMutate: boolean, reason: string }
  */
 export function shouldMutate(skill, allSkills = []) {
+  // FIX (D): Trigger mutation based on failure rate (not random)
+  const failRate = (skill.failure_count || 0) / ((skill.usage_count || 1) + 1);
+  if (failRate > 0.3) {
+    return { 
+      shouldMutate: true, 
+      reason: "high_failure_rate",
+      details: { failRate, failure_count: skill.failure_count, usage_count: skill.usage_count }
+    };
+  }
+  
   // Check usage count
   if (skill.usage_count < MUTATION_CONFIG.minUsageForMutation) {
     return { 
