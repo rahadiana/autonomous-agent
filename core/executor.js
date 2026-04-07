@@ -113,10 +113,18 @@ export function resolveValue(val, ctx) {
     if (val === "true") return true;
     if (val === "false") return false;
     
-    // Use getPath for dot-notation keys in memory (handles both "a.b" and simple keys)
+    // Use getPath for dot-notation keys (handles nested paths in memory)
+    // Check both ctx.memory and ctx.memory.memory for nested paths
     if (val.includes(".")) {
-      const fromMemory = getPath(ctx.memory, val);
+      let fromMemory = getPath(ctx.memory, val);
       if (fromMemory !== undefined) return fromMemory;
+      
+      // Also check nested memory.memory
+      if (ctx.memory.memory) {
+        fromMemory = getPath(ctx.memory.memory, val);
+        if (fromMemory !== undefined) return fromMemory;
+      }
+      
       const fromInput = getPath(ctx.input, val);
       if (fromInput !== undefined) return fromInput;
     }
@@ -316,7 +324,7 @@ function evaluateCondition(expr, ctx) {
  * Execute a single step
  */
 async function executeStep(step, frame, input) {
-  const ctx = {
+  let ctx = {
     input,
     memory: frame.memory,
     output: frame.output
@@ -350,8 +358,8 @@ async function executeStep(step, frame, input) {
     case "subtract":
     case "multiply":
     case "divide": {
-      const a = resolveValue(step.a, ctx) ?? 0;
-      const b = resolveValue(step.b, ctx) ?? 0;
+      const a = resolveValue(step.a, ctx);
+      const b = resolveValue(step.b, ctx);
       let result;
       switch (op) {
         case "add": result = a + b; break;
@@ -470,9 +478,17 @@ async function executeStep(step, frame, input) {
       const varName = step.var || step.item || "item";
       const indexName = step.index || "index";
       const steps = step.steps || [];
+      const maxLoops = 10000;
       let idx = 0;
 
+      // Convert objects to their values if needed
+      if (typeof collection === "object" && !Array.isArray(collection)) {
+        collection = Object.values(collection);
+      }
+
       for (const item of collection) {
+        if (idx >= maxLoops) break;
+        
         setPath(frame.memory, varName, item);
         setPath(frame.memory, indexName, idx);
         setPath(frame.output, varName, item);
@@ -528,11 +544,18 @@ async function executeStep(step, frame, input) {
       let loopCount = 0;
 
       while (evaluateCondition(condition, ctx)) {
-        if (++loopCount > maxLoops) {
-          throw new Error("While loop exceeded max iterations");
+        if (loopCount >= maxLoops) {
+          break; // Stop at max without throwing
         }
         
         try {
+          // Update ctx before executing steps
+          ctx = {
+            input,
+            memory: frame.memory,
+            output: frame.output
+          };
+          
           for (const subStep of steps) {
             await executeStep(subStep, frame, input);
           }
@@ -541,56 +564,93 @@ async function executeStep(step, frame, input) {
           if (err.message === "__CONTINUE__") continue;
           throw err;
         }
+        
+        loopCount++;
+        
+        // Update ctx for next iteration
+        ctx = {
+          input,
+          memory: frame.memory,
+          output: frame.output
+        };
       }
       break;
     }
 
     case "map": {
       const collection = resolveValue(step.collection, ctx) ?? [];
-      const varName = step.var || "item";
+      const varName = step.var || step.item || "item";
       const steps = step.steps || [];
       const results = [];
 
       for (const item of collection) {
         setPath(frame.memory, varName, item);
-        setPath(frame.output, varName, item);
         
         for (const subStep of steps) {
           await executeStep(subStep, frame, input);
         }
         
-        results.push(getPath(frame.memory, varName) ?? getPath(frame.output, varName));
+        // Get the result from the last step's output
+        let resultVal;
+        if (steps.length > 0) {
+          const lastStep = steps[steps.length - 1];
+          if (lastStep.to) {
+            resultVal = getPath(frame.memory, lastStep.to);
+          }
+        }
+        if (resultVal === undefined) {
+          resultVal = getPath(frame.memory, varName);
+        }
+        results.push(resultVal);
+        
+        // Clean up loop variable
+        delete frame.memory[varName];
       }
 
       if (step.to) {
         setPath(frame.memory, step.to, results);
-        setPath(frame.output, step.to, results);
       }
       break;
     }
 
     case "filter": {
       const collection = resolveValue(step.collection, ctx) ?? [];
-      const varName = step.var || "item";
+      const varName = step.var || step.item || "item";
       const steps = step.steps || [];
       const results = [];
 
       for (const item of collection) {
         setPath(frame.memory, varName, item);
-        setPath(frame.output, varName, item);
         
         let keep = true;
-        for (const subStep of steps) {
-          await executeStep(subStep, frame, input);
+        
+        // If there's a condition, evaluate it
+        if (step.condition) {
+          keep = evaluateCondition(step.condition, ctx);
+        } else if (steps.length > 0) {
+          // If there are steps, execute them and check the result
+          for (const subStep of steps) {
+            await executeStep(subStep, frame, input);
+          }
+          
+          // Check the last step's output
+          if (steps.length > 0) {
+            const lastStep = steps[steps.length - 1];
+            if (lastStep.to) {
+              const resultVal = getPath(frame.memory, lastStep.to);
+              keep = !!resultVal;
+            }
+          }
         }
         
-        const filtered = getPath(frame.memory, varName) ?? getPath(frame.output, varName);
-        if (filtered) results.push(item);
+        if (keep) results.push(item);
+        
+        // Clean up loop variable
+        delete frame.memory[varName];
       }
 
       if (step.to) {
         setPath(frame.memory, step.to, results);
-        setPath(frame.output, step.to, results);
       }
       break;
     }
@@ -738,6 +798,14 @@ export async function runSkill(skill, input) {
       stepLimit: EXECUTOR_CONFIG.maxSteps,
       hadError: !!frame.error
     };
+
+    // Merge memory into output for accessibility
+    // Always use memory values (they represent the final state after loops/etc)
+    if (frame.memory) {
+      for (const key of Object.keys(frame.memory)) {
+        frame.output[key] = frame.memory[key];
+      }
+    }
 
     return frame.output;
   }

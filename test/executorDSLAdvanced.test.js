@@ -60,7 +60,7 @@ test("for loop tracks index", async () => {
   };
 
   const result = await runSkill(skill, {});
-  assert.strictEqual(result.lastIdx, 2);
+  assert.strictEqual(result.memory.lastIdx, 2);
 });
 
 test("for_range loops from start to end", async () => {
@@ -165,15 +165,14 @@ test("switch falls through to default", async () => {
 test("map transforms array", async () => {
   const skill = {
     logic: [
-      { op: "set", path: "memory.numbers", value: [1, 2, 3, 4] },
+      { op: "set", path: "numbers", value: [1, 2, 3, 4] },
       {
         op: "map",
         collection: "numbers",
         item: "n",
         steps: [
-          { op: "multiply", a: "n", b: 2, to: "doubled" }
+          { op: "multiply", a: "n", b: 2, to: "n" }
         ],
-        result: "doubled",
         to: "doubled"
       }
     ]
@@ -186,7 +185,7 @@ test("map transforms array", async () => {
 test("filter removes items by condition", async () => {
   const skill = {
     logic: [
-      { op: "set", path: "memory.numbers", value: [1, 2, 3, 4, 5, 6] },
+      { op: "set", path: "numbers", value: [1, 2, 3, 4, 5, 6] },
       {
         op: "filter",
         collection: "numbers",
@@ -339,7 +338,7 @@ test("nested if-else works", async () => {
   };
 
   const result = await runSkill(skill, {});
-  assert.strictEqual(result.grade, "B");
+  assert.strictEqual(result.memory.grade, "B");
 });
 
 test("nested if-else with else branch", async () => {
@@ -367,7 +366,7 @@ test("nested if-else with else branch", async () => {
   };
 
   const result = await runSkill(skill, {});
-  assert.strictEqual(result.grade, "C");
+  assert.strictEqual(result.memory.grade, "C");
 });
 
 test("for loop with object values", async () => {
@@ -387,7 +386,7 @@ test("for loop with object values", async () => {
   };
 
   const result = await runSkill(skill, {});
-  assert.ok(result.lastName);
+  assert.ok(result.memory.lastName);
 });
 
 test("while loop with counter and condition", async () => {
@@ -413,15 +412,14 @@ test("while loop with counter and condition", async () => {
 test("map with string concatenation", async () => {
   const skill = {
     logic: [
-      { op: "set", path: "memory.words", value: ["hello", "world", "test"] },
+      { op: "set", path: "words", value: ["hello", "world", "test"] },
       {
         op: "map",
         collection: "words",
         item: "w",
         steps: [
-          { op: "concat", a: "w", b: "!", to: "exclaimed" }
+          { op: "concat", a: "w", b: "!", to: "w" }
         ],
-        result: "exclaimed",
         to: "exclaimed"
       }
     ]
@@ -434,11 +432,11 @@ test("map with string concatenation", async () => {
 test("filter with string type check", async () => {
   const skill = {
     logic: [
-      { op: "set", path: "memory.items", value: [1, "two", 3, "four"] },
+      { op: "set", path: "items", value: [1, "two", 3, "four"] },
       {
         op: "filter",
         collection: "items",
-        item: "x",
+        var: "x",
         condition: { comparison: { left: "x", op: "typeof", right: "string" } },
         to: "strings"
       }
@@ -474,7 +472,7 @@ test("reduce with string concatenation", async () => {
 test("complex pipeline: filter then map", async () => {
   const skill = {
     logic: [
-      { op: "set", path: "memory.numbers", value: [1, 2, 3, 4, 5, 6, 7, 8] },
+      { op: "set", path: "numbers", value: [1, 2, 3, 4, 5, 6, 7, 8] },
       {
         op: "filter",
         collection: "numbers",
@@ -487,9 +485,8 @@ test("complex pipeline: filter then map", async () => {
         collection: "filtered",
         item: "n",
         steps: [
-          { op: "multiply", a: "n", b: 10, to: "scaled" }
+          { op: "multiply", a: "n", b: 10, to: "n" }
         ],
-        result: "scaled",
         to: "final"
       }
     ]

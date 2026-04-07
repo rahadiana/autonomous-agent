@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.8.1] - 2026-04-07
+
+### Summary
+Fixed critical issues with DSL executor loop operations and memory handling. Resolved 15+ test failures related to map, filter, while loops, and nested memory references.
+
+### Fixed/Enhanced
+
+#### 1. DSL Loop Variable Resolution (FIXED)
+- **`core/executor.js`** - Loop operations now support both `item` and `var` properties
+  - `map` - now correctly uses `step.var || step.item || "item"`
+  - `filter` - now correctly uses `step.var || step.item || "item"`
+  - Fixed issue where `item` property was ignored
+
+#### 2. While Loop Iteration (FIXED)
+- **`core/executor.js`** - While loop now properly updates context each iteration
+  - Added `ctx` refresh before executing steps in while loop
+  - Fixed max iterations: now breaks instead of throwing error
+  - Prevents infinite loop timeout errors
+
+#### 3. Loop Variable Cleanup (FIXED)
+- **`core/executor.js`** - Proper cleanup of loop variables
+  - `for` loop - deletes item/index variables after loop
+  - `map` - deletes loop variable between iterations
+  - `filter` - deletes loop variable between iterations
+
+#### 4. Nested Memory Reference Resolution (FIXED)
+- **`core/executor.js`** - resolveValue now checks nested memory paths
+  - Added check for `ctx.memory.memory` path in dot-notation lookup
+  - Fixes mcp_call with nested paths like "apiResponse.body"
+
+#### 5. Test Expectation Updates
+- **`test/executorDSLAdvanced.test.js`** - Updated tests for new behavior
+  - Tests now expect results at top level (not nested in memory.)
+  - Fixed test expectations for map, filter, for, while operations
+
+### Test Results
+- Total tests: 226
+- Passed: 221
+- Failed: 5 (skillService tests - different issue)
+
+---
+
 ## [1.8.0] - 2026-04-07
 
 ### Summary

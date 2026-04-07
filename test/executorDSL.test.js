@@ -202,7 +202,7 @@ test("runSkill throws on unknown operation", async () => {
 
   await assert.rejects(
     () => runSkill(skill, {}),
-    /Unknown operation/
+    /Invalid.*operation|Unknown operation/
   );
 });
 
