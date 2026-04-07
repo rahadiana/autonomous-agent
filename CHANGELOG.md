@@ -2,7 +2,7 @@
 
 ## Test Results - 2026-04-07
 
-All **226 tests passed** (duration: ~1867ms)
+All **226 tests passed** (duration: ~1892ms)
 
 ---
 
@@ -388,30 +388,6 @@ All **226 tests passed** (duration: ~1867ms)
 
 ---
 
-## Implementation Status
-
-### Completed Features
-
-1. **Pointer-based executor** - Instruction pointer (ip) for branching/jump support
-2. **compare operation** - Supports: eq, neq, gt, gte, lt, lte, in, contains, typeof
-3. **if operation** - Conditional branching with true_jump/false_jump
-4. **jump operation** - Direct instruction pointer manipulation
-5. **mcp_call with timeout/retry** - 3s timeout, 2 retries
-6. **map operation** - Array transformation with sub-context
-7. **filter operation** - Array filtering by condition
-8. **reduce operation** - Array accumulation
-9. **Loop overflow protection** - MAX_LOOPS: 10000
-10. **Step timeout** - Configurable per-step timeout
-11. **Trace system** - Execution trace recording
-12. **Schema validation** - Input/output schema enforcement
-13. **Type checking** - Numeric operations type validation
-14. **Filter condition validation** - Boolean condition enforcement
-15. **Bandit score normalization** - Normalized score before bandit calculation
-16. **Score capping** - Min/max score clamped to [0, 1]
-17. **Decay threshold** - Skip skills with score < 0.1 during decay
-
----
-
 ## Test Summary
 
 | Metric | Value |
@@ -419,6 +395,6 @@ All **226 tests passed** (duration: ~1867ms)
 | Total Tests | 226 |
 | Passed | 226 |
 | Failed | 0 |
-| Duration | ~1867ms |
+| Duration | ~1892ms |
 
 **All tests passed!** ✅
