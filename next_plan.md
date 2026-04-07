@@ -1,285 +1,273 @@
-Saya sudah baca isi arsitektur + file konsep yang kamu upload. Ini bukan proyek biasa — ini sudah masuk **proto cognitive agent system**. Tapi secara implementasi sekarang, ada gap serius antara *design ambition* vs *runtime reality*.
+Saya sudah baca struktur yang kamu kirim (DSL, planner, blackboard, mutation, dll). Ini bukan proyek biasa — tapi ada gap serius antara **arsitektur di dokumen** vs **real implementation**.
 
-Saya akan langsung kritik tajam + kasih patch konkret (dengan kode), termasuk **input/output contoh**, supaya bisa langsung kamu pakai.
-
----
-
-# 🔴 1. MASALAH UTAMA (KRITIS)
-
-## ❌ 1. DSL executor kamu belum “formal system”
-
-Dari struktur file kamu:
-
-* DSL sudah ada op (`get`, `set`, `mcp_call`, dll) 
-* Tapi belum ada:
-
-  * **type system**
-  * **schema propagation**
-  * **step-level validation**
-
-### Dampak:
-
-* Skill bisa “valid secara syntax”, tapi rusak secara semantik
-* Critic jadi meaningless (nilai berdasarkan output random)
+Saya akan langsung kritik tajam + kasih perbaikan yang bisa kamu implement (dengan kode konkret + contoh input/output).
 
 ---
 
-## ❌ 2. Skill evaluation kamu terlalu dangkal
+# 🔴 MASALAH UTAMA (CORE FAILURE)
 
-Dari desain kamu:
+## 1. ❌ Sistem kamu masih “design-heavy”, bukan “execution-driven”
 
-```ts
-score =
-  correctness + schema + reuse + efficiency
-```
+Semua file kamu fokus ke:
+
+* planner
+* mutation
+* curiosity
+* blackboard
+* meta reasoning
+
+Tapi yang menentukan hidup/mati sistem itu:
+
+👉 **executor + validation + data consistency**
+
+Kalau ini lemah → semua layer atas cuma ilusi.
+
+---
+
+# 🔥 1. EXECUTOR DSL — MASIH BELUM “SAFE & STRICT”
+
+Dari desain kamu (mcp_call + DSL) :
 
 Masalah:
 
-* ❌ “correctness” tidak punya ground truth
-* ❌ tidak ada deterministic benchmark
-* ❌ tidak ada regression test
+### ❌ Tidak ada:
 
-➡️ Ini bikin reinforcement system kamu **noise-driven**, bukan learning
+* schema enforcement per step
+* type checking antar step
+* error isolation per step
 
----
-
-## ❌ 3. Planner terlalu bebas (hallucination risk)
-
-Planner kamu:
-
-* generate plan dari capability list 
-* tapi tidak enforce:
-
-  * schema compatibility antar step
-  * input/output contract
-
-➡️ Plan bisa “valid JSON” tapi tidak executable
-
----
-
-## ❌ 4. Blackboard tanpa locking = race condition
-
-Dari implementasi:
+### ❌ Fatal:
 
 ```ts
-blackboard.set({...})
+ctx.memory[step.to] = result;
 ```
 
-Tanpa:
-
-* mutex
-* version check
-
-➡️ Agent bisa overwrite state satu sama lain
-
+Ini:
+👉 overwrite tanpa validasi
+👉 bisa corrupt pipeline
 
 ---
 
-## ❌ 5. Mutation system belum constrained cukup
+## ✅ FIX (WAJIB)
 
-Mutation kamu:
+Tambahkan **step-level contract validation**
+
+### BEFORE
 
 ```ts
-step.op = random()
+ctx.memory[step.to] = result;
 ```
 
-
-
-Masalah:
-
-* tidak mempertimbangkan schema
-* tidak mempertimbangkan dependency
-* raw random → chaos
-
----
-
-# 🟡 2. PERBAIKAN WAJIB (WITH CODE PATCH)
-
----
-
-## ✅ FIX 1 — TYPE-SAFE DSL EXECUTOR
-
-Tambahkan **schema propagation layer**
-
-### BEFORE (punya kamu)
+### AFTER
 
 ```ts
-const result = await runDSL(skill, input);
-```
+function safeAssign(ctx, key, value, schema) {
+  const valid = validate(schema, value);
 
-### AFTER (WAJIB)
-
-```ts
-async function runDSLWithValidation(skill, input) {
-  let ctx = { input, memory: {}, output: {} };
-
-  for (const step of skill.logic) {
-    ctx = await executeStep(step, ctx);
-
-    // VALIDATE INTERMEDIATE STATE
-    if (!validateStep(step, ctx)) {
-      throw new Error(`Step failed: ${step.op}`);
-    }
+  if (!valid.valid) {
+    throw new Error(`Invalid output for ${key}`);
   }
 
-  // FINAL VALIDATION
-  const validation = validate(skill.output_schema, ctx.output);
-
-  if (!validation.valid) {
-    throw new Error("Output schema invalid");
-  }
-
-  return ctx.output;
+  ctx.memory[key] = value;
 }
 ```
 
 ---
 
-### Tambahkan validator step-level:
+## ✅ UPDATE EXECUTOR
 
 ```ts
-function validateStep(step, ctx) {
-  switch (step.op) {
-    case "get":
-      return ctx.memory !== undefined;
+case "mcp_call": {
+  const result = await mcp[tool](resolvedArgs);
 
-    case "set":
-      return true;
-
-    case "mcp_call":
-      return ctx.memory[step.to] !== undefined;
-
-    default:
-      return true;
-  }
+  safeAssign(ctx, step.to, result, step.output_schema);
+  break;
 }
 ```
 
 ---
 
-### ✅ Contoh Input / Output
+## 📌 INPUT / OUTPUT CONTOH
 
-#### Input skill:
+### Input DSL
 
 ```json
 {
-  "logic": [
-    { "op": "set", "path": "output.x", "value": 10 }
-  ],
+  "op": "mcp_call",
+  "tool": "http.get",
+  "args": { "url": "https://api.test.com" },
+  "to": "resp",
   "output_schema": {
     "type": "object",
-    "properties": { "x": { "type": "number" } },
-    "required": ["x"]
+    "properties": {
+      "status": { "type": "number" },
+      "body": { "type": "string" }
+    },
+    "required": ["status", "body"]
   }
 }
 ```
 
-#### Output:
+### Output Valid
 
 ```json
 {
-  "x": 10
+  "resp": {
+    "status": 200,
+    "body": "{}"
+  }
 }
 ```
 
----
-
-## ✅ FIX 2 — EVALUATION HARUS BERBASIS TEST CASE
-
-Sekarang kamu cuma:
-
-```ts
-if (result !== undefined) score += 0.4
-```
-
-➡️ ini lemah
-
----
-
-### PATCH:
-
-```ts
-async function evaluateSkill(skill) {
-  const tests = generateDeterministicTests(skill);
-
-  let pass = 0;
-
-  for (const t of tests) {
-    const out = await runDSL(skill, t.input);
-
-    if (deepEqual(out, t.expected)) {
-      pass++;
-    }
-  }
-
-  const passRate = pass / tests.length;
-
-  return passRate;
-}
-```
-
----
-
-### Contoh test:
-
-```ts
-[
-  {
-    input: { a: 1, b: 2 },
-    expected: { result: 3 }
-  },
-  {
-    input: { a: 5, b: 7 },
-    expected: { result: 12 }
-  }
-]
-```
-
----
-
-## ✅ FIX 3 — PLANNER HARUS TYPE-AWARE
-
-Tambahkan validasi antar step:
-
----
-
-### PATCH:
-
-```ts
-function validatePlan(plan, registry) {
-  for (let i = 0; i < plan.steps.length - 1; i++) {
-    const current = registry.get(plan.steps[i].capability);
-    const next = registry.get(plan.steps[i + 1].capability);
-
-    if (!isCompatible(current.output_schema, next.input_schema)) {
-      return false;
-    }
-  }
-
-  return true;
-}
-```
-
----
-
-### Contoh gagal:
+### Output Invalid → ERROR
 
 ```json
-[
-  { "capability": "api.fetch_user" },   // output: object
-  { "capability": "math.add" }          // input: number
-]
+{
+  "resp": "OK"
+}
 ```
 
-➡️ harus ditolak
+---
+
+# 🔴 2. SKILL SYSTEM — BELUM ADA “COMPETITION PRESSURE”
+
+Kamu sudah punya:
+
+* score
+* decay
+* mutation 
+
+Tapi:
+
+### ❌ Missing:
+
+👉 **selection pressure nyata**
+
+Sekarang:
+
+* skill buruk masih bisa kepakai
+* tidak ada penalti kuat
 
 ---
 
-## ✅ FIX 4 — BLACKBOARD LOCK (WAJIB)
+## ✅ FIX: HARD FILTER
+
+Tambahkan threshold saat selection
+
+```ts
+function filterSkills(skills) {
+  return skills.filter(s =>
+    s.score > 0.5 &&
+    s.usage_count > 2
+  );
+}
+```
 
 ---
 
-### PATCH:
+## ✅ UPDATE PIPELINE
+
+```ts
+const candidates = filterSkills(foundSkills);
+
+if (candidates.length === 0) {
+  // force generate new skill
+}
+```
+
+---
+
+## 📌 DAMPAK
+
+Sebelum:
+
+* semua skill ikut kompetisi (noise)
+
+Sesudah:
+
+* hanya skill “survive” yang dipakai
+
+---
+
+# 🔴 3. MUTATION SYSTEM — MASIH RANDOM (DANGEROUS)
+
+Dari file mutation :
+
+```ts
+const idx = Math.floor(Math.random() * newSkill.logic.length);
+```
+
+Ini:
+
+👉 **pure random mutation = chaos**
+
+---
+
+## ✅ FIX: TARGETED MUTATION
+
+Gunakan data failure
+
+### BEFORE
+
+```ts
+mutate random step
+```
+
+### AFTER
+
+```ts
+function mutateSkill(skill, failureTrace) {
+  const newSkill = clone(skill);
+
+  const failedStep = failureTrace.lastFailedStep;
+
+  const step = newSkill.logic[failedStep];
+
+  // mutate only problematic step
+  step.op = suggestBetterOp(step);
+
+  return newSkill;
+}
+```
+
+---
+
+## 📌 INPUT / OUTPUT
+
+### Input
+
+```json
+failureTrace = {
+  "lastFailedStep": 2,
+  "error": "invalid JSON parse"
+}
+```
+
+### Output (mutated)
+
+```json
+step.op: "json.safe_parse"
+```
+
+---
+
+# 🔴 4. BLACKBOARD — RISK OF RACE CONDITION
+
+Dari sistem kamu :
+
+```ts
+this.state = { ...this.state, ...patch };
+```
+
+Ini:
+
+❌ overwrite state global
+❌ tidak atomic
+❌ tidak ada locking
+
+---
+
+## ✅ FIX: VERSIONED UPDATE
 
 ```ts
 class BlackboardStore {
@@ -288,224 +276,190 @@ class BlackboardStore {
     this.version = 0;
   }
 
-  set(patch, expectedVersion) {
-    if (expectedVersion !== this.version) {
-      throw new Error("Race condition detected");
-    }
-
-    this.state = { ...this.state, ...patch };
+  set(patch) {
     this.version++;
-  }
 
-  get() {
-    return {
-      state: this.state,
-      version: this.version
+    this.state = {
+      ...this.state,
+      ...patch,
+      _version: this.version
     };
+
+    this.notify();
   }
 }
 ```
 
 ---
 
-## ✅ FIX 5 — SAFE MUTATION (Bukan random liar)
-
----
-
-### BEFORE
+## ✅ BONUS: CONFLICT DETECTION
 
 ```ts
-step.op = random()
-```
-
----
-
-### AFTER
-
-```ts
-function mutateSkillSafe(skill) {
-  const newSkill = clone(skill);
-
-  for (const step of newSkill.logic) {
-    if (step.op === "compare") {
-      const allowed = [">", "<", "=="];
-
-      step.operator = pickBestOperator(
-        allowed,
-        skill.performanceHistory
-      );
-    }
-  }
-
-  return newSkill;
+if (incomingVersion < currentVersion) {
+  throw new Error("Stale update detected");
 }
 ```
 
 ---
 
-➡️ Mutation harus:
+# 🔴 5. PLANNER LOOP — BELUM ADA “FAIL FAST”
 
-* berdasarkan history
-* bukan random
+Dari planner loop :
 
----
+Masalah:
 
-# 🟢 3. YANG SUDAH BAGUS (JANGAN DIUBAH)
-
-Beberapa bagian kamu sudah benar:
-
-### ✅ Skill memory + decay system
-
-* reinforcement + decay ✔️ 
-
-### ✅ Bandit exploration (UCB)
-
-* ini sudah production-grade logic ✔️ 
-
-### ✅ Multi-agent separation
-
-* planner / executor / critic ✔️ 
-
-### ✅ Hierarchical planning
-
-* macro → micro ✔️ 
-
-➡️ Ini fondasi kuat, jangan dirombak.
+❌ planner bisa muter tanpa penalti
+❌ critic tidak mengontrol cukup keras
 
 ---
 
-# 🔵 4. GAP TERBESAR (REALITY CHECK)
+## ✅ FIX: FAILURE ESCALATION
 
-Sistem kamu sekarang:
-
-✔ arsitektur → sangat advanced
-❌ runtime → belum stabil
-
----
-
-## Intinya:
-
-Kamu punya:
-
-> **brain architecture**
-
-Tapi belum punya:
-
-> **physics engine**
-
----
-
-# 🔥 5. PRIORITAS IMPLEMENTASI (WAJIB URUT)
-
-Jangan loncat.
-
-### 1️⃣ Executor + validation (HARUS SELESAI)
-
-→ tanpa ini semua meaningless
-
-### 2️⃣ Deterministic test system
-
-→ supaya learning valid
-
-### 3️⃣ Plan validation
-
-→ stop hallucination
-
-### 4️⃣ Blackboard locking
-
-→ stop race condition
-
-### 5️⃣ Baru: mutation + bandit
-
----
-
-# 🎯 6. OUTPUT FLOW IDEAL (SETELAH FIX)
-
----
-
-## Input:
-
-```
-"jumlahkan 2 angka"
+```ts
+if (iteration > 2 && best.score < 0.5) {
+  throw new Error("Planning failed hard");
+}
 ```
 
 ---
 
-## Output system:
+# 🔴 6. SYSTEM TERLALU CEPAT NAIK LEVEL
+
+Kamu sudah punya:
+
+* curiosity
+* world model
+* meta reasoning 
+
+Masalah:
+
+👉 foundation belum solid
+
+---
+
+## ⚠️ PRIORITAS YANG BENAR
+
+Urutan WAJIB:
+
+1. ✅ Executor (strict + safe)
+2. ✅ Validator (schema enforcement)
+3. ✅ Skill selection (competition)
+4. ✅ Test system
+5. ❌ Baru planner advanced
+6. ❌ Baru curiosity
+
+Kalau tidak:
+👉 sistem jadi “pintar di atas, bodoh di bawah”
+
+---
+
+# 🔥 REKOMENDASI PALING KRITIS
+
+## 1. Tambahkan “TRACE SYSTEM” (WAJIB)
+
+```ts
+ctx.trace.push({
+  step,
+  input: resolvedArgs,
+  output: result,
+  success: true
+});
+```
+
+---
+
+## 📌 OUTPUT CONTOH
 
 ```json
 {
-  "skill": {
-    "name": "add_numbers",
-    "capability": "math.add",
-    "logic": [
-      {
-        "op": "set",
-        "path": "output.result",
-        "value": "input.a + input.b"
-      }
-    ]
-  },
-  "test_result": {
-    "pass_rate": 1.0
-  },
-  "evaluation": {
-    "score": 0.92
+  "trace": [
+    {
+      "step": "http.get",
+      "output": { "status": 200 }
+    },
+    {
+      "step": "json.parse",
+      "output": { "user": "A" }
+    }
+  ]
+}
+```
+
+👉 ini penting untuk:
+
+* debugging
+* mutation targeting
+* learning
+
+---
+
+## 2. Tambahkan “STRICT DSL VALIDATOR”
+
+Sebelum execute:
+
+```ts
+function validateDSL(skill) {
+  if (!Array.isArray(skill.logic)) return false;
+
+  for (const step of skill.logic) {
+    if (!step.op) return false;
   }
+
+  return true;
 }
 ```
 
 ---
 
-## Execution:
+## 3. Tambahkan “DETERMINISM CHECK”
 
-```json
-input:
-{ "a": 2, "b": 3 }
+```ts
+const r1 = await runDSL(skill, input);
+const r2 = await runDSL(skill, input);
 
-output:
-{ "result": 5 }
+if (JSON.stringify(r1) !== JSON.stringify(r2)) {
+  throw new Error("Non-deterministic skill");
+}
 ```
 
 ---
 
-# 🧠 7. PENILAIAN AKHIR
+# 🧠 KESIMPULAN (REALITY CHECK)
 
-Saya akan jujur:
+Sistem kamu:
 
-### 🔥 Kekuatan:
-
-* Arsitektur sudah level research-grade
-* Sudah mencakup:
-
-  * learning
-  * evolution
-  * planning
-  * memory
-
-### ⚠️ Kelemahan:
-
-* Execution layer belum solid
-* Evaluator belum valid
-* Safety belum cukup
+✅ sudah **arsitektur level tinggi (advanced)**
+❌ tapi **belum production-grade core**
 
 ---
 
-# 🚀 8. LANGKAH SELANJUTNYA
+## Kalau tidak diperbaiki:
 
-Kalau kamu serius mau ini jadi sistem nyata (bukan konsep):
-
-👉 bilang:
-
-**“audit executor + DSL engine secara detail sampai production-ready”**
-
-Saya akan:
-
-* bongkar interpreter kamu
-* redesign DSL jadi type-safe
-* kasih full implementation (bukan pseudo)
+* mutation → chaos
+* planner → halu
+* skill → tidak converge
+* system → stagnan
 
 ---
 
-Jangan lanjut ke fitur baru sebelum executor kamu benar.
-Kalau tidak, semua layer di atasnya cuma ilusi kompleksitas.
+## Kalau diperbaiki (yang saya kasih):
+
+Sistem kamu jadi:
+
+👉 deterministic
+👉 evaluatable
+👉 evolvable
+
+---
+
+# 🎯 NEXT STEP (JANGAN NGACO)
+
+Pilih satu:
+
+1. **“audit executor + DSL runtime saya (real code)”**
+2. **“buatkan test system yang bener (auto generate + edge case)”**
+3. **“buatkan capability matching pakai embedding + reranking”**
+
+Kalau kamu lompat ke meta-reasoning dulu:
+
+👉 proyek ini akan gagal total.
