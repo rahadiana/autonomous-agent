@@ -596,7 +596,7 @@ async function executeStep(step, frame, input) {
       const args = resolveObject(step.args || {}, ctx);
       const result = await callTool(tool, args);
       if (step.to) {
-        setPath(frame.memory, step.to, result);
+        safeAssign({ output: frame.memory }, step.to, result, step.output_schema);
         setPath(frame.output, step.to, result);
       }
       break;
@@ -1146,7 +1146,140 @@ export function getSkillRunner() {
   return SkillRunner;
 }
 
-export { EXECUTOR_CONFIG, validateStepWithSchema };
+// ============== SAFE ASSIGN WITH SCHEMA VALIDATION (FIX #1) ==============
+
+function safeAssign(ctx, key, value, schema) {
+  if (!schema) {
+    ctx.output[key] = value;
+    return;
+  }
+
+  const valid = validateSchema(schema, value);
+
+  if (!valid.valid) {
+    throw new Error(`Invalid output for ${key}: ${valid.errors.join(", ")}`);
+  }
+
+  ctx.output[key] = value;
+}
+
+function validateSchema(schema, value) {
+  const errors = [];
+
+  if (!schema || !value) {
+    return { valid: true, errors: [] };
+  }
+
+  if (schema.required) {
+    for (const field of schema.required) {
+      if (value[field] === undefined) {
+        errors.push(`Missing required field: ${field}`);
+      }
+    }
+  }
+
+  if (schema.properties) {
+    for (const [field, typeDef] of Object.entries(schema.properties)) {
+      if (value[field] !== undefined) {
+        const expectedType = typeDef.type;
+        const actualType = typeof value[field];
+        if (actualType !== expectedType) {
+          errors.push(`Field ${field} expected ${expectedType}, got ${actualType}`);
+        }
+      }
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors
+  };
+}
+
+// ============== STRICT DSL VALIDATOR (FIX #2) ==============
+
+export function validateDSL(skill) {
+  if (!skill) {
+    return { valid: false, errors: ["Skill is null or undefined"] };
+  }
+
+  if (!skill.logic) {
+    return { valid: false, errors: ["Skill missing logic"] };
+  }
+
+  if (!Array.isArray(skill.logic)) {
+    return { valid: false, errors: ["Skill logic must be an array"] };
+  }
+
+  const errors = [];
+
+  for (let i = 0; i < skill.logic.length; i++) {
+    const step = skill.logic[i];
+
+    if (!step.op) {
+      errors.push(`Step ${i} missing 'op' field`);
+    }
+
+    if (step.op && !EXECUTOR_CONFIG.allowedOps.has(step.op)) {
+      errors.push(`Step ${i} has invalid operation: ${step.op}`);
+    }
+
+    if (step.to && typeof step.to !== "string") {
+      errors.push(`Step ${i} has invalid 'to' field`);
+    }
+
+    if (step.from && typeof step.from !== "string") {
+      errors.push(`Step ${i} has invalid 'from' field`);
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors
+  };
+}
+
+// ============== DETERMINISM CHECK (FIX #3) ==============
+
+export async function checkDeterminism(skill, input, runDSL) {
+  try {
+    const r1 = await runDSL(skill, input);
+    const r2 = await runDSL(skill, input);
+
+    const s1 = JSON.stringify(r1);
+    const s2 = JSON.stringify(r2);
+
+    if (s1 !== s2) {
+      return {
+        deterministic: false,
+        error: "Non-deterministic skill: different outputs for same input"
+      };
+    }
+
+    return { deterministic: true };
+  } catch (e) {
+    return {
+      deterministic: false,
+      error: e.message
+    };
+  }
+}
+
+// ============== TRACE SYSTEM (FIX #4) ==============
+
+export function createTraceEntry(step, input, output, success, error = null) {
+  return {
+    step: step.op || "unknown",
+    stepIndex: step._index || 0,
+    input: input ? JSON.parse(JSON.stringify(input)) : null,
+    output: output ? JSON.parse(JSON.stringify(output)) : null,
+    success,
+    error: error?.message || null,
+    timestamp: Date.now()
+  };
+}
+
+export { EXECUTOR_CONFIG, validateStepWithSchema, safeAssign, validateSchema };
 
 // ============== SANDBOX ISOLATION ==============
 

@@ -893,3 +893,31 @@ async function updateStats(skill, success) {
     last_used_at: new Date()
   });
 }
+
+// ============== HARD FILTER (FIX #2) ==============
+
+function filterSkills(skills) {
+  return skills.filter(s =>
+    s.score > 0.5 &&
+    s.usage_count > 2
+  );
+}
+
+function selectWithHardFilter(skills) {
+  const candidates = filterSkills(skills);
+
+  if (candidates.length === 0) {
+    console.log("[SELECT] No skills passed hard filter, forcing new skill generation");
+    return { forceNew: true, reason: "no_qualified_skills" };
+  }
+
+  const scored = candidates.map(skill => ({
+    skill,
+    score: skill.score * (skill.usage_count / 10)
+  }));
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].skill;
+}
+
+export { filterSkills, selectWithHardFilter };

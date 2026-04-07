@@ -442,3 +442,42 @@ function evaluateSingle(result, expected) {
   }
   return actual === exp ? 1 : 0;
 }
+
+// ============== TARGETED MUTATION (FIX #3) ==============
+
+export function mutateSkillFromFailure(skill, failureTrace) {
+  const newSkill = structuredClone(skill);
+
+  if (!newSkill.logic || newSkill.logic.length === 0) return newSkill;
+
+  const failedStep = failureTrace?.lastFailedStep ?? failureTrace?.stepIndex ?? 0;
+
+  if (failedStep >= newSkill.logic.length) {
+    return newSkill;
+  }
+
+  const step = newSkill.logic[failedStep];
+  const errorMsg = failureTrace?.error?.message || "";
+
+  if (errorMsg.includes("invalid") || errorMsg.includes("parse")) {
+    if (step.op === "mcp_call") {
+      step.op = "mcp_call";
+    }
+  }
+
+  if (errorMsg.includes("timeout")) {
+    if (step.op === "for" || step.op === "while") {
+      step.maxLoops = (step.maxLoops || 1000) / 2;
+    }
+  }
+
+  if (errorMsg.includes("schema") || errorMsg.includes("validation")) {
+    step.expect_schema = step.output_schema || step.expect_schema;
+  }
+
+  return newSkill;
+}
+
+function suggestBetterOp(step) {
+  return step.op;
+}

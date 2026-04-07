@@ -393,3 +393,17 @@ export function planToDSL(plan) {
     }))
   };
 }
+
+// ============== FAIL FAST (FIX #5) ==============
+
+export function checkFailFast(iteration, bestScore, cycleLimit = 5, minScoreThreshold = 0.5) {
+  if (iteration > 2 && bestScore < minScoreThreshold) {
+    throw new Error(`Planning failed hard: iteration=${iteration}, bestScore=${bestScore}`);
+  }
+
+  if (iteration >= cycleLimit) {
+    throw new Error(`Cycle limit exceeded: iteration=${iteration}, limit=${cycleLimit}`);
+  }
+
+  return { shouldContinue: true };
+}
