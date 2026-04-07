@@ -325,6 +325,21 @@ export class Blackboard {
     return this.write(zoneName, patch, writer);
   }
 
+  hardGuardSet(zoneName, patch, incomingVersion, writer) {
+    const zone = this.zones.get(zoneName);
+    if (!zone) {
+      throw new Error(`Zone not found: ${zoneName}`);
+    }
+
+    if (incomingVersion < zone.version) {
+      console.warn(`[Blackboard] Rejected outdated update: incoming v${incomingVersion}, current v${zone.version}`);
+      return { accepted: false, version: zone.version, reason: "outdated_update" };
+    }
+
+    const result = this.write(zoneName, patch, writer);
+    return { accepted: true, version: result };
+  }
+
   hasChanged(zoneName, lastKnownVersion) {
     return this.getZoneVersion(zoneName) > lastKnownVersion;
   }

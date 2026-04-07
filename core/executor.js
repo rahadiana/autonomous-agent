@@ -13,6 +13,7 @@
  */
 
 import vm from "vm";
+import { fork } from "child_process";
 import { callTool } from "./mcp.js";
 
 // ============== CONFIGURATION ==============
@@ -28,6 +29,10 @@ const EXECUTOR_CONFIG = {
   
   // Safety
   dangerousKeywords: ["process", "require", "module", "exports", "__dirname", "__filename"],
+  
+  // Sandbox
+  useSandbox: false,
+  sandboxTimeout: 1000,
   
   // Allowed operations (whitelist)
   allowedOps: new Set([
@@ -720,6 +725,10 @@ function createFrame() {
  * Run skill with full execution frame
  */
 export async function runSkill(skill, input) {
+  if (EXECUTOR_CONFIG.useSandbox && typeof skill.logic === "string") {
+    return runIsolated(skill, input);
+  }
+
   const startTime = Date.now();
   const logic = skill.logic;
 
@@ -866,4 +875,37 @@ export function getSkillRunner() {
 }
 
 export { EXECUTOR_CONFIG };
-export default runSkill;
+
+// ============== SANDBOX ISOLATION ==============
+
+let sandboxWorker = null;
+
+function getSandboxWorker() {
+  if (!sandboxWorker) {
+    sandboxWorker = fork("./core/sandboxWorker.js");
+  }
+  return sandboxWorker;
+}
+
+export async function runIsolated(skill, input) {
+  return new Promise((resolve, reject) => {
+    const worker = getSandboxWorker();
+    const timeout = setTimeout(() => {
+      worker.kill();
+      reject(new Error("sandbox_timeout"));
+    }, EXECUTOR_CONFIG.sandboxTimeout);
+
+    const handler = (msg) => {
+      clearTimeout(timeout);
+      worker.off("message", handler);
+      if (msg.error) {
+        reject(new Error(msg.error));
+      } else {
+        resolve(msg.result);
+      }
+    };
+
+    worker.on("message", handler);
+    worker.send({ skill, input });
+  });
+}

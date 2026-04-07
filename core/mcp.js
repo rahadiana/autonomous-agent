@@ -85,5 +85,31 @@ export async function callTool(tool, args) {
     throw new Error(`Tool not found: ${tool}`);
   }
 
-  return mcp[tool](args);
+  const rawResult = await mcp[tool](args);
+  return normalizeHttp(rawResult);
+}
+
+export function normalizeHttp(res) {
+  if (!res || typeof res !== "object") {
+    return res;
+  }
+
+  if (res.status !== undefined && res.body !== undefined) {
+    return {
+      ok: res.status >= 200 && res.status < 300,
+      data: safeJsonParse(res.body),
+      raw: res.body
+    };
+  }
+
+  return res;
+}
+
+function safeJsonParse(text) {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 }
