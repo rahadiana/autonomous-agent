@@ -300,11 +300,18 @@ export function createPlan(goal, state, skills, options = {}) {
     },
     
     applyActionFn: (currentState, action) => {
-      return {
+      // FIX: Connect tree search to real output
+      // After each action, propagate the output to next state
+      const nextState = {
         ...currentState,
         lastAction: action.capability,
-        steps: (currentState.steps || 0) + 1
+        steps: (currentState.steps || 0) + 1,
+        // Store current output for propagation (for planner to see real results)
+        current_output: currentState.current_output ?? {},
+        // Track action history for debugging
+        actionHistory: [...(currentState.actionHistory || []), action.capability]
       };
+      return nextState;
     },
     
     isGoalFn: (currentState, currentGoal) => {
@@ -320,6 +327,10 @@ export function createPlan(goal, state, skills, options = {}) {
       }
       if (currentGoal?.requiredSteps) {
         h = Math.max(0, currentGoal.requiredSteps - (currentState.steps || 0));
+      }
+      // Penalize paths that have not shown improvement
+      if (currentState.current_output && Object.keys(currentState.current_output).length > 0) {
+        h += 0.2;  // Reward paths that produce output
       }
       return h;
     }

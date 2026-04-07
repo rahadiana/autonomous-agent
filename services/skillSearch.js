@@ -77,6 +77,28 @@ export class SkillSearch {
   listAll() {
     return Array.from(this.skillIndex.values());
   }
+
+  // FIX: Implement capability index retrieval
+  // Returns skills sorted by score for a given capability
+  retrieveByCapability(capability, options = {}) {
+    const { topK = 5, minScore = 0 } = options;
+    
+    const allSkills = this.listAll();
+    
+    // Filter by capability
+    let filtered = allSkills.filter(s => 
+      s.capability && s.capability.includes(capability)
+    );
+    
+    // Sort by score (descending)
+    filtered.sort((a, b) => (b.score || 0) - (a.score || 0));
+    
+    // Filter by minimum score
+    filtered = filtered.filter(s => (s.score || 0) >= minScore);
+    
+    // Return top K
+    return filtered.slice(0, topK);
+  }
 }
 
 export function createSkillSearch() {

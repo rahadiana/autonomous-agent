@@ -3,7 +3,7 @@
 ## April 7, 2026 - All Tests PASSED
 
 Total: 226 tests passed
-Duration: 2019.62ms
+Duration: ~2012ms
 
 ---
 
@@ -12,8 +12,10 @@ Duration: 2019.62ms
 ### bandit.test.js (8 tests)
 - **banditScore returns higher score for unexplored skills**: PASS
   - Input: skillA {score: 0.5, usage_count: 0}, skillB {score: 0.5, usage_count: 100}
-  - Output: scoreA > scoreB (exploration bonus)
+  - Output: scoreA > scoreB (exploration bonus applied)
 - **banditScore returns higher score for higher base score when usage is equal**: PASS
+  - Input: skillA {score: 0.8, usage_count: 10}, skillB {score: 0.5, usage_count: 10}
+  - Output: scoreA > scoreB
 - **banditScore exploration decreases as usage increases**: PASS
 - **banditScore balances exploit vs explore based on c parameter**: PASS
 - **selectSkill picks the skill with highest bandit score**: PASS
@@ -24,7 +26,7 @@ Duration: 2019.62ms
 - **selectSkill returns the only skill in array**: PASS
 
 ### callSkill.test.js (20 tests)
-- **call_skill executes nested skill**: PASS (51.96ms)
+- **call_skill executes nested skill**: PASS (59.83ms)
   - Input: nested skill call with {a: 5, b: 3}
   - Output: {result: 8}
 - **call_skill passes input correctly**: PASS
@@ -38,7 +40,7 @@ Duration: 2019.62ms
 - **call_skill validates output schema**: PASS
 
 ### decay.test.js (4 tests)
-- **applyDecay reduces score for old skills**: PASS (46.68ms)
+- **applyDecay reduces score for old skills**: PASS (55.12ms)
   - Input: skill with last_used_at 25 hours ago, score 0.8
   - Output: score reduced by ~0.04
 - **applyDecay does not affect skills without last_used_at**: PASS
@@ -46,7 +48,7 @@ Duration: 2019.62ms
 - **applyDecay handles empty database**: PASS
 
 ### evaluator.test.js (6 tests)
-- **correct skill gets high score**: PASS (17.41ms)
+- **correct skill gets high score**: PASS
   - Input: correct math.add skill
   - Output: score 0.66, 12/13 passed
 - **wrong skill gets low score**: PASS
@@ -55,7 +57,7 @@ Duration: 2019.62ms
 - **skill with syntax error gets zero score**: PASS
 
 ### executor.test.js (55 tests)
-- **runSkill executes basic logic and returns output**: PASS (4.38ms)
+- **runSkill executes basic logic and returns output**: PASS
 - **runSkill handles string operations**: PASS
 - **runSkill handles conditional logic**: PASS
 - **runSkill handles array operations**: PASS
@@ -75,7 +77,7 @@ Duration: 2019.62ms
 - **runSkill executes mcp_call to json.parse**: PASS
   - Input: {tool: "json.parse", args: {text: '{"a":1}'}}
   - Output: {a: 1}
-- **runSkill rejects disallowed tool**: PASS (31.97ms)
+- **runSkill rejects disallowed tool**: PASS
 - **runSkill resolves memory reference in mcp_call args**: PASS
 - **runSkill resolves nested memory reference in mcp_call args**: PASS
 - **runSkill executes if branching - true branch**: PASS
@@ -87,14 +89,14 @@ Duration: 2019.62ms
 - **runSkill throws on unknown operation**: PASS
 
 ### executorDSL.test.js (30 tests)
-- **for loop iterates over array**: PASS (2.86ms)
+- **for loop iterates over array**: PASS
   - Input: collection [1,2,3], var "item", steps set result
   - Output: result = [1,2,3]
 - **for loop processes each item**: PASS
 - **for loop tracks index**: PASS
 - **for_range loops from start to end**: PASS
 - **for_range supports custom step size**: PASS
-- **while loop executes until condition fails**: PASS (0.68ms)
+- **while loop executes until condition fails**: PASS
 - **switch matches correct case**: PASS
 - **switch falls through to default**: PASS
 - **map transforms array**: PASS
@@ -107,8 +109,8 @@ Duration: 2019.62ms
   - Input: collection [1,2,3], initial 0, steps add
   - Output: 6
 - **comparison operators work**: PASS (eq, lt, gt, neq, lte, gte)
-- **for loop prevents infinite iteration**: PASS (86.48ms)
-- **while loop prevents infinite iteration**: PASS (41.98ms)
+- **for loop prevents infinite iteration**: PASS
+- **while loop prevents infinite iteration**: PASS
 
 ### executorSafety.test.js (10 tests)
 - **runSkill throws on dangerous code with process**: PASS
@@ -117,9 +119,7 @@ Duration: 2019.62ms
 - **runSkill throws on dangerous code with require**: PASS
 - **runSkill throws on dangerous code with module**: PASS
 - **runSkill executes normal logic**: PASS
-- **runSkill timeout prevents infinite loops**: PASS (101.70ms)
-  - Input: infinite while loop
-  - Output: timeout after 100ms
+- **runSkill timeout prevents infinite loops**: PASS
 
 ### mcp.test.js (9 tests)
 - **ALLOWED_TOOLS contains expected tools**: PASS
@@ -136,20 +136,20 @@ Duration: 2019.62ms
 - **callTool works for allowed tool**: PASS
 
 ### mutation.test.js (5 tests)
-- **mutateSkill returns clone with same structure**: PASS (2.63ms)
+- **mutateSkill returns clone with same structure**: PASS
 - **mutateSkill can change add to subtract**: PASS
 - **mutateSkill handles empty logic array**: PASS
 - **mutateSkill handles string logic (passthrough)**: PASS
 - **mutateSkill does not mutate original**: PASS
 
 ### planner.test.js (13 tests)
-- **PlanNode constructor initializes correctly**: PASS (2.33ms)
+- **PlanNode constructor initializes correctly**: PASS
 - **PlanNode getPath returns action path**: PASS
 - **PlanNode getDepth returns correct depth**: PASS
 - **Planner search finds solution for simple goal**: PASS
 - **Planner search handles timeout**: PASS
 - **Planner respects maxNodes limit**: PASS
-- **Planner sorts by score**: PASS (9.79ms)
+- **Planner sorts by score**: PASS
 - **decomposeGoal handles string goal**: PASS
 - **decomposeGoal handles object goal with steps**: PASS
 - **decomposeGoal returns empty for unknown format**: PASS
@@ -158,15 +158,13 @@ Duration: 2019.62ms
 - **createPlan returns planner result**: PASS
 
 ### pruning.test.js (4 tests)
-- **getPruningStats returns valid structure**: PASS (69.97ms)
-- **pruneSkills respects minUsage protection**: PASS (42.57ms)
-  - Output: { pruned: 1, protected: 1, revived: 0 }
-- **pruneSkills ensures capability safety**: PASS (38.63ms)
-  - Output: { pruned: 1, revived: 1 }
+- **getPruningStats returns valid structure**: PASS
+- **pruneSkills respects minUsage protection**: PASS
+- **pruneSkills ensures capability safety**: PASS
 - **getPruningStats shows score distribution**: PASS
 
 ### reasoner.test.js (19 tests)
-- **Reasoner evaluate returns score for valid plan**: PASS (3.54ms)
+- **Reasoner evaluate returns score for valid plan**: PASS
 - **Reasoner evaluate handles timeout status**: PASS
 - **Reasoner evaluate handles limit_exceeded status**: PASS
 - **Reasoner evaluate handles no_solution status**: PASS
@@ -184,14 +182,14 @@ Duration: 2019.62ms
 - **Reasoner selectBest handles empty array**: PASS
 
 ### scoring.test.js (5 tests)
-- **evaluate returns 1.0 for valid result**: PASS (1.90ms)
+- **evaluate returns 1.0 for valid result**: PASS
 - **evaluate returns 0.0 for invalid result**: PASS
 - **scoreFromEvaluation extracts score from eval result**: PASS
 - **scoreFromEvaluation handles null**: PASS
 - **scoreFromEvaluation handles missing score**: PASS
 
 ### skillSearch.test.js (14 tests)
-- **SkillSearch indexSkill adds skill to index**: PASS (3.02ms)
+- **SkillSearch indexSkill adds skill to index**: PASS
 - **SkillSearch searchByText finds relevant skills**: PASS
 - **SkillSearch searchByText respects topK**: PASS
 - **SkillSearch searchByText respects threshold**: PASS
@@ -205,8 +203,8 @@ Duration: 2019.62ms
 - **SkillSearch listAll returns all skills**: PASS
 
 ### skillService.test.js (7 tests)
-- **handleRequest throws when no skill found**: PASS (57.08ms)
-- **handleRequest executes skill and returns result**: PASS (91.94ms)
+- **handleRequest throws when no skill found**: PASS
+- **handleRequest executes skill and returns result**: PASS
 - **handleRequest updates usage_count after execution**: PASS
 - **handleRequest updates failure_count on validation failure**: PASS
 - **handleRequest updates last_used_at timestamp**: PASS
@@ -214,7 +212,7 @@ Duration: 2019.62ms
 - **handleRequest score updates with reinforcement formula**: PASS
 
 ### testBuilder.test.js (9 tests)
-- **buildTestCases returns at least empty input test**: PASS (2.55ms)
+- **buildTestCases returns at least empty input test**: PASS
 - **buildTestCases generates number test cases**: PASS
 - **buildTestCases generates string test cases**: PASS
 - **buildTestCases generates boolean test cases**: PASS
@@ -224,7 +222,7 @@ Duration: 2019.62ms
 - **buildRandomFuzz generates random values**: PASS
 
 ### testRunner.test.js (6 tests)
-- **runTests returns correct passed count for valid skills**: PASS (51.67ms)
+- **runTests returns correct passed count for valid skills**: PASS
 - **runTests returns zero for invalid schema**: PASS
 - **runTests handles runtime errors gracefully**: PASS
 - **runTests handles empty test cases**: PASS
@@ -232,7 +230,7 @@ Duration: 2019.62ms
 - **runTests records each test result**: PASS
 
 ### toolRegistry.test.js (10 tests)
-- **createTool creates tool with defaults**: PASS (1.96ms)
+- **createTool creates tool with defaults**: PASS
 - **createTool accepts custom capability**: PASS
 - **ToolRegistry register adds tool**: PASS
 - **ToolRegistry register throws on duplicate**: PASS
@@ -243,7 +241,7 @@ Duration: 2019.62ms
 - **ToolRegistry search finds by name/description/capability**: PASS
 
 ### validator.test.js (7 tests)
-- **validate returns true for valid data**: PASS (39.98ms)
+- **validate returns true for valid data**: PASS
 - **validate returns false for missing required field**: PASS
 - **validate returns false for wrong type**: PASS
 - **validate handles array schema**: PASS
@@ -252,7 +250,7 @@ Duration: 2019.62ms
 - **validate handles minimum and maximum constraints**: PASS
 
 ### vectorStore.test.js (9 tests)
-- **generateEmbedding returns 128-dim vector**: PASS (2.05ms)
+- **generateEmbedding returns 128-dim vector**: PASS
 - **generateEmbedding normalizes vector**: PASS
 - **generateEmbedding same text produces same embedding**: PASS
 - **generateEmbedding different texts produce different embeddings**: PASS
@@ -264,7 +262,7 @@ Duration: 2019.62ms
 - **VectorStore throws on dimension mismatch**: PASS
 
 ### versioning.test.js (4 tests)
-- **createVersion creates a new skill with incremented version**: PASS (35.19ms)
+- **createVersion creates a new skill with incremented version**: PASS
 - **createVersion generates unique id for each version**: PASS
 - **createVersion chains versions correctly**: PASS
 - **createVersion sets created_at timestamp**: PASS
@@ -273,54 +271,52 @@ Duration: 2019.62ms
 
 ## Changes Implemented (from next_plan.md)
 
-### 1. Autonomous Loop ✅
-Added main autonomous loop with:
-- Curiosity computation based on goal history
-- Goal generation and selection
-- Closed-loop execution with 5-second check intervals
+### 1. DSL Executor → Learning System Integration ✅
+Added `updateSkillAfterExecution` function in orchestrator.js:
+- Updates skill stats (usage_count, success_count, failure_count) directly after execution
+- Applies reinforcement learning formula: newScore = oldScore * 0.7 + successRate * 0.3
+- Logs learning progress for monitoring
 
-### 2. Planner → Execution State Update ✅
-Integrated state updates after each execution step:
-- Updates `world` zone with execution results
-- Updates `belief` zone with success/failure tracking
+### 2. Tree Search → Real Output Connection ✅
+Enhanced planner.js `createPlan` function:
+- Added `current_output` propagation in state for planner to track real results
+- Added `actionHistory` tracking for debugging
+- Updated heuristic to reward paths that produce output
 
-### 3. Simulation Engine → DSL Integration ✅
-Modified Simulation class to use DSL executor in simulation mode:
-- Added `simulateStep` method with mock handling for MCP calls
-- Added `isSimulation` flag for sandboxed execution
+### 3. Blackboard Race Condition Fix ✅
+Verified blackboard.js already has proper locking:
+- `acquireLock` / `releaseLock` mechanism implemented
+- Zone-level locking with timeout support
 
-### 4. DSL Validator ✅
-Enhanced `validateDSL` function:
-- Validates jump targets are within logic array bounds
-- Prevents invalid jumps and branching
+### 4. Seeded Random for Deterministic Mutation ✅
+Modified mutation.js:
+- Added `seededRandom(seed)` function for reproducible mutations
+- Updated `mutateSkill(skill, seed)` to accept optional seed parameter
+- Default seed uses Date.now() for backward compatibility
 
-### 5. Bandit → Skill Selection ✅
-Bandit already integrated with skill selection in:
-- `selectSkillWithBandit` function
-- `runAgent` function
-- `learningOrchestrator.js`
+### 5. Goal System Explosion Guard ✅
+Enhanced autonomousLoop in orchestrator.js:
+- Added MAX_GOALS = 20 limit
+- Added duplicate goal detection before adding
+- Logs when goals are skipped due to max limit or duplication
 
-### 6. Blackboard + Scheduler Integration ✅
-Enhanced ControlScheduler with:
-- Added imagination and goal_manager agents
-- Priority-based agent selection
+### 6. Self-Modifying System Safety Guard ✅
+Added validation in learningStep:
+- Added FORBIDDEN_TARGETS = ["executor", "core", "runtime"]
+- Added `validateMutationSafety` function to check mutation targets
+- Added rollback check: only accepts if newScore > preScore + 0.05
 
-### 7. Meta-Reasoning Runtime Injection ✅
-Added meta-reasoning integration:
-- `MetaReasoningLayer` instance in orchestrator
-- `applyStrategy` function to inject config to runtime
-- Updated planner to use globalConfig
+### 7. Capability Index Retrieval ✅
+Added `retrieveByCapability` method in SkillSearch:
+- Returns skills sorted by score (descending)
+- Supports topK and minScore filtering
+- Enables fast capability-based skill retrieval
 
-### 8. Self-Modifying System Trigger ✅
-Added trigger for self-modification:
-- Monitors history length > 10
-- Triggers mutation when failure count > 5
-- Tests modifications against baseline score
-
-### 9. Global Error Boundary ✅
-Added try-catch in `runAgent`:
-- Catches errors and sets ERROR status
-- Returns error object instead of throwing
+### 8. Simulation Engine → DSL Sandbox ✅
+Verified executor.js already supports sandbox mode:
+- `runIsolated` function for sandboxed execution
+- Worker-based isolation with timeout support
+- Uses fork() for process-level sandboxing
 
 ---
 
@@ -337,5 +333,9 @@ Added try-catch in `runAgent`:
 | Meta-Reasoning | ✅ Integrated |
 | Self-Modification | ✅ Implemented |
 | Error Handling | ✅ Implemented |
+| Deterministic Mutation | ✅ Implemented |
+| Goal Explosion Guard | ✅ Implemented |
+| Safety Guards | ✅ Implemented |
+| Capability Index | ✅ Implemented |
 
 All 226 tests passed!

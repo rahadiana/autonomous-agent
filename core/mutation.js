@@ -6,9 +6,19 @@
  * - Mutation budget (how many mutations)
  * - Improvement threshold (minimum improvement required)
  * - Lineage tracking
+ * - Deterministic seeding for reproducibility
  */
 
 import { createVersion } from "./versioning.js";
+
+// Seeded random for deterministic mutation
+function seededRandom(seed) {
+  let state = seed;
+  return function() {
+    state = (state * 1103515245 + 12345) & 0x7fffffff;
+    return state / 0x7fffffff;
+  };
+}
 
 /**
  * Mutation configuration
@@ -192,20 +202,23 @@ export function mutateWithControl(skill, mutationLogic = null) {
 
 /**
  * Original simple mutation (kept for backward compatibility)
+ * Now uses seeded random for deterministic, reproducible mutations
  * 
  * @param {Object} skill - Skill to mutate
+ * @param {number} seed - Optional seed for deterministic mutation (default: Date.now())
  * @returns {Object} Mutated skill clone
  */
-export function mutateSkill(skill) {
+export function mutateSkill(skill, seed = null) {
   const clone = JSON.parse(JSON.stringify(skill));
 
   if (!clone.logic || clone.logic.length === 0) return clone;
 
-  const idx = Math.floor(Math.random() * clone.logic.length);
+  const rng = seededRandom(seed ?? Date.now());
+  const idx = Math.floor(rng() * clone.logic.length);
   const step = clone.logic[idx];
 
   if (step.op === "add") {
-    step.op = Math.random() > 0.5 ? "add" : "subtract";
+    step.op = rng() > 0.5 ? "add" : "subtract";
   }
 
   return clone;

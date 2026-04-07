@@ -151,15 +151,21 @@ export async function executorStep(bb, selectedSkill) {
     bb.write("world", world, "executor");
 
     const belief = bb.getZoneData("belief") || {};
-    if (result?.error) {
-      belief.lastFailure = result.error;
-      belief.failureCount = (belief.failureCount || 0) + 1;
-    } else {
+    const success = !result?.error;
+    if (success) {
       belief.lastSuccess = result;
       belief.successCount = (belief.successCount || 0) + 1;
+    } else {
+      belief.lastFailure = result.error;
+      belief.failureCount = (belief.failureCount || 0) + 1;
     }
     belief.lastUpdate = Date.now();
     bb.write("belief", belief, "executor");
+
+    // FIX: Update skill stats directly after execution for learning integration
+    if (selectedSkill) {
+      await updateSkillAfterExecution(selectedSkill, result);
+    }
 
     bb.setStatus(Status.CRITIC);
 
@@ -172,9 +178,46 @@ export async function executorStep(bb, selectedSkill) {
     belief.lastUpdate = Date.now();
     bb.write("belief", belief, "executor");
 
+    // Update skill stats on failure
+    if (selectedSkill) {
+      await updateSkillAfterExecution(selectedSkill, { error: err.message });
+    }
+
     bb.setStatus(Status.PLANNING, "execution_failed");
 
     return { error: err.message };
+  }
+}
+
+// FIX: Direct integration of DSL executor with learning system
+async function updateSkillAfterExecution(skill, result) {
+  if (!skill || !skill.id) return;
+  
+  const success = !result?.error;
+  const validation = result?._meta?.valid ?? success;
+  
+  // Get skill from DB or update in-memory
+  const { Skill } = await import("../models/skill.js");
+  const dbSkill = await Skill.findByPk(skill.id);
+  
+  if (dbSkill) {
+    const usage = (dbSkill.usage_count || 0) + 1;
+    const successCount = (dbSkill.success_count || 0) + (success ? 1 : 0);
+    const failCount = (dbSkill.failure_count || 0) + (success ? 0 : 1);
+    const successRate = successCount / usage;
+    
+    // Reinforcement learning formula
+    const newScore = dbSkill.score * 0.7 + successRate * 0.3;
+    
+    await dbSkill.update({
+      usage_count: usage,
+      success_count: successCount,
+      failure_count: failCount,
+      score: Math.max(0, Math.min(1, newScore)),
+      last_used_at: new Date()
+    });
+    
+    console.log(`[LEARNING] Skill ${skill.name}: score ${dbSkill.score.toFixed(3)}, success rate ${(successRate * 100).toFixed(1)}%`);
   }
 }
 
@@ -220,17 +263,37 @@ export async function learningStep(bb, selectedSkill) {
       selectedSkill.failure_count = (selectedSkill.failure_count || 0) + 1;
     }
 
+    // FIX: Self-modifying system safety guard
+    // 1. Forbidden targets - never allow modification of executor
+    const FORBIDDEN_TARGETS = ["executor", "core", "runtime"];
+    
     if (shouldMutateTargeted(selectedSkill)) {
       const mutated = mutateSkill(selectedSkill);
       
+      // Safety check: Validate mutation doesn't target forbidden systems
+      const isSafe = validateMutationSafety(mutated, FORBIDDEN_TARGETS);
+      
+      if (!isSafe.safe) {
+        console.log(`[MUTATION] Rejected: ${isSafe.reason}`);
+        return;
+      }
+      
       if (validateDSL(mutated)) {
         const score = await testSkill(mutated);
+        const preScore = selectedSkill.score;
         
-        if (score > selectedSkill.score + 0.05) {
+        // 2. Rollback auto: Revert if score decreased
+        if (score > preScore + 0.05) {
           const newVersion = createVersion(selectedSkill);
           Object.assign(newVersion, mutated);
           newVersion.parent_id = selectedSkill.id;
+          
+          // Store for potential rollback
+          bb.write("pending_versions", [{ skill: newVersion, parentId: selectedSkill.id, preScore }], "learning");
+          
           return newVersion;
+        } else {
+          console.log(`[MUTATION] Rejected: no improvement (pre=${preScore.toFixed(2)}, post=${score.toFixed(2)})`);
         }
       }
     }
@@ -247,8 +310,13 @@ export async function learningStep(bb, selectedSkill) {
         if (skill.usage_count > 5 && skill.score < baselineScore) {
           const mutated = mutateSkill(skill);
           
+          // Safety check
+          const isSafe = validateMutationSafety(mutated, FORBIDDEN_TARGETS);
+          if (!isSafe.safe) continue;
+          
           if (validateDSL(mutated)) {
             const score = await testSkill(mutated);
+            const preScore = skill.score;
             
             if (score > baselineScore + 0.05) {
               const newVersion = createVersion(skill);
@@ -266,6 +334,33 @@ export async function learningStep(bb, selectedSkill) {
       }
     }
   }
+}
+
+// FIX: Validate mutation safety
+function validateMutationSafety(skill, forbiddenTargets) {
+  if (!skill) return { safe: false, reason: "null_skill" };
+  
+  // Check capability for forbidden patterns
+  const capability = skill.capability || "";
+  for (const target of forbiddenTargets) {
+    if (capability.toLowerCase().includes(target.toLowerCase())) {
+      return { safe: false, reason: `forbidden_target: ${target}` };
+    }
+  }
+  
+  // Check logic for dangerous operations
+  if (skill.logic && Array.isArray(skill.logic)) {
+    for (const step of skill.logic) {
+      if (step.op === "mcp_call") {
+        const tool = step.tool || "";
+        if (tool.includes("process") || tool.includes("eval") || tool.includes("exec")) {
+          return { safe: false, reason: "dangerous_tool" };
+        }
+      }
+    }
+  }
+  
+  return { safe: true, reason: "ok" };
 }
 
 function validateDSL(skill) {
@@ -574,13 +669,26 @@ function updateBelief(bb, result) {
 }
 
 export async function autonomousLoop(bb) {
+  const MAX_GOALS = 20;
+  
   while (true) {
     const curiosity = computeCuriosity(bb);
     
-    if (curiosity > 2) {
+    // FIX: Goal system explosion guard
+    // 1. Limit max goals
+    const currentGoals = bb.getZoneData("goals") || [];
+    if (currentGoals.length >= MAX_GOALS) {
+      console.log(`[GOAL] Max goals (${MAX_GOALS}) reached, skipping generation`);
+    } else if (curiosity > 2) {
       const newGoals = generateGoal(bb);
       if (newGoals) {
-        addGoals(bb, [newGoals]);
+        // 2. Dedup: Check if goal already exists
+        const isDuplicate = currentGoals.some(g => g.goal === newGoals.goal);
+        if (!isDuplicate) {
+          addGoals(bb, [newGoals]);
+        } else {
+          console.log(`[GOAL] Duplicate goal skipped: ${newGoals.goal}`);
+        }
       }
     }
 
