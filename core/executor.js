@@ -22,6 +22,8 @@ const EXECUTOR_CONFIG = {
   // Timeout
   stepTimeoutMs: 100,
   maxSteps: 20,
+  maxCost: 100,
+  maxMcpCall: 3,
   
   // Retry
   maxRetries: 2,
@@ -392,6 +394,13 @@ export async function executeStepWithTrace(step, ctx) {
       break;
     default:
       result = null;
+  }
+
+  if (result === undefined) {
+    throw new Error(`Step ${step.op} returned undefined`);
+  }
+  if (typeof result === "object" && result === null) {
+    throw new Error(`Step ${step.op} returned null object`);
   }
 
   const after = ctx.output;
@@ -1036,7 +1045,7 @@ export function getSkillRunner() {
   return SkillRunner;
 }
 
-export { EXECUTOR_CONFIG };
+export { EXECUTOR_CONFIG, validateStepWithSchema };
 
 // ============== SANDBOX ISOLATION ==============
 

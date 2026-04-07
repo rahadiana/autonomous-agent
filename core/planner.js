@@ -332,3 +332,17 @@ export function createRegistry(skills) {
   }
   return registry;
 }
+
+export function planToDSL(plan) {
+  if (!plan || !plan.bestPath) {
+    return { logic: [] };
+  }
+  
+  return {
+    logic: plan.bestPath.map(s => ({
+      op: "call_skill",
+      skill: s.capability || s.skill,
+      input: s.input || {}
+    }))
+  };
+}

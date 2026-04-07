@@ -24,9 +24,27 @@ function queryByCanonicalCapability(capability) {
   return normalizeCapability(capability);
 }
 
+async function findBestSkill(input, skills) {
+  const normalized = normalizeCapability(input);
+  
+  const exactMatches = skills.filter(s => 
+    normalizeCapability(s.capability) === normalized
+  );
+  
+  if (exactMatches.length > 0) {
+    const best = exactMatches.reduce((a, b) => 
+      ((a.score || 0) > (b.score || 0)) ? a : b
+    );
+    return { skill: best, score: 1, matchType: "exact" };
+  }
+  
+  return { skill: null, score: 0, matchType: "none" };
+}
+
 module.exports = { 
   normalizeCapability, 
   canonicalizeCapability,
   enforceCapabilityNormalization,
-  queryByCanonicalCapability
+  queryByCanonicalCapability,
+  findBestSkill
 };
